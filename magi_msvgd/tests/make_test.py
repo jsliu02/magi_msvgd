@@ -62,3 +62,23 @@ class ODEmodel():
         sample[:,1:] = np.random.normal(ground_truth[:,1:] * obs_mask, sigma)
 
         return sample
+
+    def evaluate(self, Xs, thetas, sigmas, I, rounded=3):
+        '''
+        Returns X_rmse, theta_err, and (optionally) sigma_err
+        '''
+        I = np.round(I, 3)
+        X_hat = torch.mean(Xs, axis=0).cpu().numpy()
+        X_true = self.solution[np.where(np.isin(self.solution[:,0], I))][:,1:]
+        X_rmse = ((X_hat - X_true)**2).mean(axis=0)**2
+        
+        theta_hat = torch.mean(thetas, axis=0).cpu().numpy()
+        theta_err = theta_hat - self.theta
+
+        if (sigmas is not None) and (sigmas.shape[1] > 0):
+            sigma_hat = torch.mean(sigmas, axis=0).cpu().numpy()
+            sigma_err = sigma_hat - self.sigma
+            
+            return X_rmse, theta_err, sigma_err
+        else:
+            return X_rmse, theta_err
