@@ -63,14 +63,17 @@ class ODEmodel():
 
         return sample
 
-    def evaluate(self, Xs, thetas, sigmas, I, rounded=3):
+    def evaluate(self, Xs, thetas, sigmas, I, logmodel=False, rounded=3):
         '''
         Returns X_rmse, theta_err, and (optionally) sigma_err
         '''
         I = np.round(I, 3)
         X_hat = torch.mean(Xs, axis=0).cpu().numpy()
         X_true = self.solution[np.where(np.isin(self.solution[:,0], I))][:,1:]
-        X_rmse = ((X_hat - X_true)**2).mean(axis=0)**2
+        if not logmodel:
+            X_rmse = ((X_hat - X_true)**2).mean(axis=0)**2
+        else:
+            X_rmse = ((np.exp(X_hat) - np.exp(X_true))**2).mean(axis=0)**2
         
         theta_hat = torch.mean(thetas, axis=0).cpu().numpy()
         theta_err = theta_hat - self.theta
