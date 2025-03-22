@@ -133,7 +133,7 @@ class baseMAGISolver():
         self.pos_theta = pos_theta
 
         # set prior tempering
-        if temper_prior is None:
+        if prior_temperature is None:
             self.beta_inv = self.N / (self.D * self.n)
         else:
             self.beta_inv = prior_temperature
