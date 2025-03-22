@@ -136,7 +136,7 @@ class baseMAGISolver():
         if temper_prior is None:
             self.beta_inv = self.N / (self.D * self.n)
         else:
-            self.beta_inv = 1 / prior_temperature
+            self.beta_inv = prior_temperature
 
 
     def _configure_polymorphism(self, to_tensor, to_arr, is_tensor, vmap, replicate, pad_tensor, normal, concat, reshape,
