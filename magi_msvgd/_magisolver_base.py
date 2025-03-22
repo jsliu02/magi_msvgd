@@ -471,8 +471,9 @@ class baseMAGISolver():
     
                 m = self.tensor_max(self.tensor_abs(grad_particles))
                 pbar.set_description(f'Split {i} finished with max grad = {m:.5f}')
-                
-            self.mitotic_split(opt, grad_particles)
+
+            if i < mitosis_splits:
+                self.mitotic_split(opt, grad_particles)
             
         # Xs: k x n x D
         # thetas: k x p
