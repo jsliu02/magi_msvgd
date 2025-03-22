@@ -147,7 +147,7 @@ def clip(tensor):
 class MAGISolver(_base.baseMAGISolver):
     def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0,
                  sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
-                 temper_prior=True, bayesian_sigma=True,
+                 prior_temperature=None, bayesian_sigma=True,
                  debugging=False):
         
         super()._configure_polymorphism(
@@ -185,7 +185,7 @@ class MAGISolver(_base.baseMAGISolver):
         )
         super().__init__(ode=ode, dfdx=dfdx, dfdtheta=dfdtheta, data=data, theta_guess=theta_guess,
                          theta_conf=theta_conf, sigmas=sigmas, mu=mu, mu_dot=mu_dot, pos_X=pos_X, pos_theta=pos_theta,
-                         temper_prior=temper_prior, bayesian_sigma=bayesian_sigma)
+                         prior_temperature=prior_temperature, bayesian_sigma=bayesian_sigma)
         if debugging:
             tf.debugging.set_log_device_placement(True)
         
