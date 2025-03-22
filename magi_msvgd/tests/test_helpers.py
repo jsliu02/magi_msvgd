@@ -6,6 +6,7 @@ def obs_matrix(tau, rounded=3):
     '''
     Convert list of observed times to matrix of observed times, column 0 the joined times,
     remaining columns contain truthy/falsy indicating whether observed.
+    Rounds times in I to `rounded` decimal places to mitigate floating point errors.
     '''
     obs_t = np.unique(np.concatenate(tau))
     obs_t = np.round(obs_t, rounded)
@@ -19,7 +20,7 @@ def obs_matrix(tau, rounded=3):
 
 def discretize_data(sample, I, rounded=3):
     '''
-    Discretize a dataset at time set I.
+    Discretize a dataset at time set I. Rounds times in I to `rounded` decimal places to mitigate floating point errors.
     '''
     I = np.round(I, rounded)
     data_disc = np.full(shape=(len(I), sample.shape[1]), fill_value=np.nan)
@@ -30,7 +31,8 @@ def discretize_data(sample, I, rounded=3):
 
 def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e-5):
     '''
-    Check manaul gradients against autograd.
+    Check manaul gradients against autograd. Returns scores in [0, 1] and the average maximum
+    asbolute distance between non-close gradients. May not give full score due to float imprecision.
     '''
     x_score = 0
     t_score = 0
