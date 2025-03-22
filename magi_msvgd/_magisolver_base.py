@@ -7,7 +7,7 @@ Dependencies: numpy, scipy, sklearn, tqdm
 class baseMAGISolver():
     def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0,
                  sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
-                 temper_prior=True, bayesian_sigma=True):
+                 prior_temperature=None, bayesian_sigma=True):
         '''
         Initialization is all mostly in Numpy, and class variables are all stored as Numpy arrays.
         This a polymorphic base class that can be used to build an SVGD module on many libraries.
@@ -133,10 +133,10 @@ class baseMAGISolver():
         self.pos_theta = pos_theta
 
         # set prior tempering
-        if temper_prior:
+        if temper_prior is None:
             self.beta_inv = self.N / (self.D * self.n)
         else:
-            self.beta_inv = 1.0
+            self.beta_inv = 1 / prior_temperature
 
 
     def _configure_polymorphism(self, to_tensor, to_arr, is_tensor, vmap, replicate, pad_tensor, normal, concat, reshape,
