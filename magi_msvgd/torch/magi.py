@@ -119,7 +119,7 @@ def clip(tensor):
 #########################################################################################################
 
 class MAGISolver(_base.baseMAGISolver):
-    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=None,
+    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=1,
                  sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature=None, bayesian_sigma=True):
         

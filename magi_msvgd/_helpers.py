@@ -66,24 +66,27 @@ def initialize_unobs(solver):
         
         # minimize L2 loss of guess's numerical derivatives, plus an attraction term to adjust theta
         # useful for cases where one of the thetas being zero would force the guess into a flat line
-        return solver.tensor_mean((f_vals - f_diffs)**2, axis=None) + solver.tensor_mean(theta_conf * (theta_guess - theta_set_guess)**2, axis=None)
+        ode_mse = solver.tensor_mean((f_vals - f_diffs)**2, axis=None)
+        theta_mse = solver.tensor_mean(theta_conf * (theta_guess - theta_set_guess)**2, axis=None)
+        return ode_mse + theta_mse
 
-    # set up tensors for optimization
-    x_guess0 = solver.to_tensor(
-        np.ones(shape=(solver.n, len(solver.unobserved_components))) * np.nanmean(solver.x_init),
-        dtype="float32", requires_grad=True)
-    theta_guess0 = solver.to_tensor(solver.theta_guess, dtype="float32", requires_grad=True)
-    
-    opt = solver.Adam([x_guess0, theta_guess0], lr=0.01)
-    last_loss = 0
-    for i in trange(10_000, desc="Computing X_unobs and theta initialization"):
-        loss = solver.autograd(objective, [x_guess0, theta_guess0], opt)
-        # set a stopping condition if loss decreases by <= 0.1
-        if i % 200 == 0:
-            if np.abs(last_loss - loss) <= 0.1:
-                break
-            else:
-                last_loss = loss
+    x_guess_init = np.ones(shape=(solver.n, len(solver.unobserved_components))) * np.nanmean(solver.x_init)
+    for i in range(solver.X_guess):
+        # set up tensors for optimization
+        x_guess0 = solver.to_tensor(x_guess_init, dtype="float32", requires_grad=True)
+        theta_guess0 = solver.to_tensor(solver.theta_guess, dtype="float32", requires_grad=True)
+        
+        opt = solver.Adam([x_guess0, theta_guess0], lr=0.01)
+        last_loss = 0
+        for j in trange(10_000, desc="Computing X_unobs and theta initialization"):
+            loss = solver.autograd(objective, [x_guess0, theta_guess0], opt)
+            # set a stopping condition if loss decreases by <= 0.1
+            if j % 200 == 0:
+                if np.abs(last_loss - loss) <= 0.1:
+                    break
+                else:
+                    last_loss = loss
+        x_guess_init = x_guess0
                 
     # store the solved starting state guesses
     solver.x_init[:,solver.unobserved_components] = solver.to_arr(x_guess0).astype(float)

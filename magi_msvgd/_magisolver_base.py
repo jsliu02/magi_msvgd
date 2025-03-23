@@ -5,7 +5,7 @@ from tqdm.notebook import trange
 Dependencies: numpy, scipy, sklearn, tqdm
 '''
 class baseMAGISolver():
-    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=None,
+    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=1,
                  sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature=None, bayesian_sigma=True):
         '''
@@ -27,10 +27,13 @@ class baseMAGISolver():
 
         OPTIONAL:
         theta_conf (float or array) : confidence in initial guess for theta, larger theta_conf will pull theta initialization toward guess
+        X_guess (int) : number of times to run X initialization procedure, can give more stable results
         sigmas (array or None) : observation noise standard deviation, if known; individual entries can be set to None
         mu (array, n x D) : prior mean function evaluated at discretization index I
         mu_dot (array, n x D) : derivative of prior mean function with respect to time, evaluated at I
-        temper_prior (bool) : whether to use beta = Dn/N for prior tempering
+        pos_X (bool) : whether to restrict X to strictly positive values (PyTorch only)
+        pos_theta (bool) : whether to restrict theta to strictly positive values (PyTorch only)
+        temper_prior (float) : prior tempering factor, default: beta = Dn/N
         bayesian_sigma (bool) : whether to give Bayesian treatment to sigma or fix at initial value
         '''
         # save ode function and its gradients, as well as map versions that apply over dim 0
@@ -74,6 +77,8 @@ class baseMAGISolver():
         self.theta_conf = np.array(theta_conf, dtype=float)
         # number of parameters in theta
         self.p = len(theta_guess)
+
+        self.X_guess = X_guess
 
         # boolean mask for observed data
         tau = np.isfinite(self.x_init)
