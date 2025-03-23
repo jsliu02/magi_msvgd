@@ -5,7 +5,7 @@ from tqdm.notebook import trange
 Dependencies: numpy, scipy, sklearn, tqdm
 '''
 class baseMAGISolver():
-    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0,
+    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=None,
                  sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature=None, bayesian_sigma=True):
         '''
