@@ -119,8 +119,8 @@ def clip(tensor):
 #########################################################################################################
 
 class MAGISolver(_base.baseMAGISolver):
-    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=1,
-                 sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
+    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0,
+                 sigmas=None, X_guess=1, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature=None, bayesian_sigma=True):
         
         super()._configure_polymorphism(
@@ -158,7 +158,7 @@ class MAGISolver(_base.baseMAGISolver):
         )
         
         super().__init__(ode=ode, dfdx=dfdx, dfdtheta=dfdtheta, data=data, theta_guess=theta_guess,
-                         theta_conf=theta_conf, X_guess=X_guess, sigmas=sigmas, mu=mu, mu_dot=mu_dot, pos_X=pos_X, pos_theta=pos_theta,
+                         theta_conf=theta_conf, sigmas=sigmas, X_guess=X_guess, mu=mu, mu_dot=mu_dot, pos_X=pos_X, pos_theta=pos_theta,
                          prior_temperature=prior_temperature, bayesian_sigma=bayesian_sigma)
 
     def solve(self, optimizer, optimizer_kwargs=dict(), max_iter=10_000, mitosis_splits=0,

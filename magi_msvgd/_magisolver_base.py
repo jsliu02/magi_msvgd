@@ -5,8 +5,8 @@ from tqdm.notebook import trange
 Dependencies: numpy, scipy, sklearn, tqdm
 '''
 class baseMAGISolver():
-    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0, X_guess=1,
-                 sigmas=None, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
+    def __init__(self, ode, dfdx, dfdtheta, data, theta_guess, theta_conf=0,
+                 sigmas=None, X_guess=1, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature=None, bayesian_sigma=True):
         '''
         Initialization is all mostly in Numpy, and class variables are all stored as Numpy arrays.
@@ -27,8 +27,8 @@ class baseMAGISolver():
 
         OPTIONAL:
         theta_conf (float or array) : confidence in initial guess for theta, larger theta_conf will pull theta initialization toward guess
-        X_guess (int) : number of times to run X initialization procedure, can give more stable results
         sigmas (array or None) : observation noise standard deviation, if known; individual entries can be set to None
+        X_guess (int) : number of times to run X initialization procedure, can give more stable results
         mu (array, n x D) : prior mean function evaluated at discretization index I
         mu_dot (array, n x D) : derivative of prior mean function with respect to time, evaluated at I
         pos_X (bool) : whether to restrict X to strictly positive values (PyTorch only)
