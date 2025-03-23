@@ -86,7 +86,7 @@ def initialize_unobs(solver):
                     break
                 else:
                     last_loss = loss
-        x_guess_init = x_guess0
+        x_guess_init = solver.to_arr(x_guess0)
                 
     # store the solved starting state guesses
     solver.x_init[:,solver.unobserved_components] = solver.to_arr(x_guess0).astype(float)
