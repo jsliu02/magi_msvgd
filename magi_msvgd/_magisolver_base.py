@@ -327,7 +327,7 @@ class baseMAGISolver():
                     particles[:,:self.p] * self.to_tensor(particles[:,:self.p] > 0, dtype=self.dtype))
         if self.unknown_sigmas is not None:
             self.update_tensor(particles, np.arange(self.p+self.D*self.n, particles.shape[1]),
-                    particles[:,self.p:self.p+self.D*self.n:] * self.to_tensor(particles[:,self.p+self.D*self.n:] > 0, dtype=self.dtype))
+                    particles[:,self.p+self.D*self.n:] * self.to_tensor(particles[:,self.p+self.D*self.n:] > 0, dtype=self.dtype))
             
         # Xs: k x n x D
         Xs = self.permute(self.reshape(
