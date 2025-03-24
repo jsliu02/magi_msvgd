@@ -41,17 +41,18 @@ def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e
     for _ in trange(trials):
         X = torch.normal(0, 1, size=[n, D], requires_grad=True)
         t = torch.normal(0, 1, size=[p], requires_grad=True)
+        time = torch.normal(0, 1, size=[1])
         X.grad = None
         t.grad = None
-        result = ode(X, t)
+        result = ode(X, t, time)
         for i in range(result.shape[0]):
             for j in range(result.shape[1]):
                 result[i,j].backward(retain_graph=True)
         auto_x = X.grad
         auto_t = t.grad
     
-        x_grad = dfdx(X, t).sum(axis=2)
-        t_grad = dfdtheta(X, t).sum(axis=[0,2])
+        x_grad = dfdx(X, t, time).sum(axis=2)
+        t_grad = dfdtheta(X, t, time).sum(axis=[0,2])
     
         if torch.allclose(auto_x, x_grad, atol=atol, rtol=rtol):
             x_score += 1
