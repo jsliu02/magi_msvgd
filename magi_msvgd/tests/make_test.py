@@ -22,7 +22,7 @@ class ODEmodel():
         '''
         x_torch = torch.tensor(x).reshape(1, -1)
         theta_torch = torch.tensor(self.theta)
-        de = self.ode(x_torch, theta_torch, torch.tensor([[t]]))
+        de = self.ode(x_torch, theta_torch, torch.tensor([t]))
         return de.numpy().flatten()
         
     def get_ode_solution(self, X0=None, T=20, step=1e-4):
