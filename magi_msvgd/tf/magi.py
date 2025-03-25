@@ -198,7 +198,7 @@ class MAGISolver(_base.baseMAGISolver):
         return super().svgd_kernel(particles, h)
 
     def solve(self, optimizer, optimizer_kwargs=dict(), max_iter=10_000, mitosis_splits=0,
-              atol=1e-5, rtol=1e-8, bandwidth=-1, monitor_convergence=False):
+              atol=1e-2, rtol=1e-8, bandwidth=-1, monitor_convergence=False):
         optimizer_kwargs['params'] = False
         results = super().solve(optimizer, optimizer_kwargs, max_iter, mitosis_splits, 
                              atol, rtol, bandwidth, monitor_convergence)
