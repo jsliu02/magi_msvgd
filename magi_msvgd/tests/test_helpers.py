@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from tqdm.notebook import trange
 
 def obs_matrix(tau, rounded=3):
@@ -34,6 +33,7 @@ def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e
     Check manaul gradients against autograd. Returns scores in [0, 1] and the average maximum
     asbolute distance between non-close gradients. May not give full score due to float imprecision.
     '''
+    import torch
     x_score = 0
     t_score = 0
     avg_max_x_diff = 0
