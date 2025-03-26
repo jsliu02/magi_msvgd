@@ -152,57 +152,65 @@ def fit_phisigma(solver, v=2.01):
                                           bounds=[(1e-10, np.inf)]*2, method=method).x
             solver.phis[d] = fitted
 
-def build_matrices(I, phi1, phi2, v=2.01):
+def build_matrices(solver, v=2.01):
     '''
-    Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
-    - I is an np.array of discretized timesteps, phi1 & phi2 are floats.
-
-    Code source: Skyler Wu
+    Construct GP matrices and inverses.
     '''
-    # tile appropriately to facilitate vectorization
-    s = np.tile(A=I, reps=I.shape[0]); t = s.T
-
-    # l = |s-t|, u = sqrt(2*nu) * l / phi2 - let's nan out diagonals to avoid imprecision errors.
-    l = np.abs(s - t); u = np.sqrt(2*v) * l / phi2; np.fill_diagonal(a=u, val=np.nan)
-
-    # pre-compute Bessel function + derivatives
-    Bv0 = sp.special.kvp(v=v, z=u, n=0)
-    Bv1 = sp.special.kvp(v=v, z=u, n=1)
-    Bv2 = sp.special.kvp(v=v, z=u, n=2)
-
-    # 1. Kappa itself, but we need to correct everywhere with l=|s-t|=0 to have value exp(0.0) = 1.0
-    Kappa = (phi1/sp.special.gamma(v)) * (2 ** (1 - (v/2))) * ((np.sqrt(v) / phi2) ** v)
-    Kappa *= Bv0
-    Kappa *= (l ** v)
+    def build_matrices_d(I, phi1, phi2, v=v):
+        '''
+        Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
+        - I is an np.array of discretized timesteps, phi1 & phi2 are floats.
     
-    # https://en.wikipedia.org/wiki/Mat%C3%A9rn_covariance_function
-    np.fill_diagonal(Kappa, val=phi1) # behavior as |s-t| \to 0^+
-
-    # 2. p_Kappa, but need to replace everywhere with l=|s-t|=0 to have value 0.0.
-    p_Kappa = (2 ** (1 - (v/2)))
-    p_Kappa *= phi1 * ((u / np.sqrt(2)) ** v)
-    p_Kappa *= ( (u * phi2 * Bv1) + (v*phi2*Bv0) )
-    p_Kappa /= (phi2 * (s-t) * sp.special.gamma(v))
-    np.fill_diagonal(p_Kappa, val=0.0) # behavior as |s-t| \to 0^+
-
-    # 3. Kappa_p (by symmetry)
-    Kappa_p = p_Kappa * -1
-
-    # 4. Kappa_pp - let's proceed term-by-term (save multiplier terms at the end)
-    Kappa_pp = 2 * np.sqrt(2) * (v ** 1.5) * phi2 * l * Bv1
-    Kappa_pp += ( ( (v ** 2) * (phi2 ** 2) ) - ( v * (phi2 ** 2) ) ) * Bv0
-    Kappa_pp += ( (2 * v * (s ** 2)) - (4 * v * s * t) + (2 * v * (t ** 2)) ) * Bv2
-    Kappa_pp *= ( -1.0 * (2 ** (1 - (v/2))) * phi1 * ((u / np.sqrt(2)) ** v) )
-    Kappa_pp /= ( (phi2 ** 2) * (l ** 2) * sp.special.gamma(v) )
+        Credit: Skyler Wu
+        '''
+        # tile appropriately to facilitate vectorization
+        s = np.tile(A=I, reps=I.shape[0]); t = s.T
     
-    # CHECK WITH PROF. YANG ABOUT THIS ONE! SHOULD THERE BE A NEGATIVE HERE?
-    np.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) )) # behavior as |s-t| \to 0^+
-
-    # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
-    C_d_inv = np.linalg.pinv(Kappa)
-    m_d = p_Kappa @ C_d_inv
-    K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
-    K_d_inv = np.linalg.inv(K_d)
+        # l = |s-t|, u = sqrt(2*nu) * l / phi2 - let's nan out diagonals to avoid imprecision errors.
+        l = np.abs(s - t); u = np.sqrt(2*v) * l / phi2; np.fill_diagonal(a=u, val=np.nan)
     
-    # 6. return our three matrices
-    return C_d_inv, m_d, K_d_inv
+        # pre-compute Bessel function + derivatives
+        Bv0 = sp.special.kvp(v=v, z=u, n=0)
+        Bv1 = sp.special.kvp(v=v, z=u, n=1)
+        Bv2 = sp.special.kvp(v=v, z=u, n=2)
+    
+        # 1. Kappa itself, but we need to correct everywhere with l=|s-t|=0 to have value exp(0.0) = 1.0
+        Kappa = (phi1/sp.special.gamma(v)) * (2 ** (1 - (v/2))) * ((np.sqrt(v) / phi2) ** v)
+        Kappa *= Bv0
+        Kappa *= (l ** v)
+        
+        # https://en.wikipedia.org/wiki/Mat%C3%A9rn_covariance_function
+        np.fill_diagonal(Kappa, val=phi1) # behavior as |s-t| \to 0^+
+    
+        # 2. p_Kappa, but need to replace everywhere with l=|s-t|=0 to have value 0.0.
+        p_Kappa = (2 ** (1 - (v/2)))
+        p_Kappa *= phi1 * ((u / np.sqrt(2)) ** v)
+        p_Kappa *= ( (u * phi2 * Bv1) + (v*phi2*Bv0) )
+        p_Kappa /= (phi2 * (s-t) * sp.special.gamma(v))
+        np.fill_diagonal(p_Kappa, val=0.0) # behavior as |s-t| \to 0^+
+    
+        # 3. Kappa_p (by symmetry)
+        Kappa_p = p_Kappa * -1
+    
+        # 4. Kappa_pp - let's proceed term-by-term (save multiplier terms at the end)
+        Kappa_pp = 2 * np.sqrt(2) * (v ** 1.5) * phi2 * l * Bv1
+        Kappa_pp += ( ( (v ** 2) * (phi2 ** 2) ) - ( v * (phi2 ** 2) ) ) * Bv0
+        Kappa_pp += ( (2 * v * (s ** 2)) - (4 * v * s * t) + (2 * v * (t ** 2)) ) * Bv2
+        Kappa_pp *= ( -1.0 * (2 ** (1 - (v/2))) * phi1 * ((u / np.sqrt(2)) ** v) )
+        Kappa_pp /= ( (phi2 ** 2) * (l ** 2) * sp.special.gamma(v) )
+        
+        # CHECK WITH PROF. YANG ABOUT THIS ONE! SHOULD THERE BE A NEGATIVE HERE?
+        np.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) )) # behavior as |s-t| \to 0^+
+    
+        # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
+        C_d_inv = np.linalg.pinv(Kappa)
+        m_d = p_Kappa @ C_d_inv
+        K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
+        K_d_inv = np.linalg.inv(K_d)
+        
+        # 6. return our three matrices
+        return C_d_inv, m_d, K_d_inv
+
+    # Compute and save matrices for all components
+    solver.C_invs, solver.ms, solver.K_invs = [np.array(mats) for mats in \
+                zip(*[build_matrices_d(solver.I, phi[0], phi[1], v=2.01) for phi in solver.phis])] 
