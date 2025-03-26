@@ -122,8 +122,7 @@ class baseMAGISolver():
         self.sigmas = self.sigmas.reshape(-1, 1)
 
         # C_invs, ms, K_invs : D x n x n -> to be replicated to k x D x n x n
-        self.C_invs, self.ms, self.K_invs = [np.array(mats) for mats in \
-                zip(*[helpers.build_matrices(self.I, phi[0], phi[1], v=2.01) for phi in self.phis])]
+        helpers.build_matrices(self, v=2.01)
 
         # set GP mean priors
         # mu, mu_dot: n x D -> to be replicated to k x D x n x 1 later
