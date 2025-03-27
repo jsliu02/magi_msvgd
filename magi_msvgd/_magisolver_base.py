@@ -457,7 +457,7 @@ class baseMAGISolver():
                 opt = optimizer(**optimizer_kwargs)
 
             with trange(max_iter) as pbar:
-                for iteration in pbar:
+                for iteration in range(max_iter):
                     grad_particles = -self.gradient(self.particles)
                     if not self.MAP:
                         kxy, dxkxy = self.svgd_kernel(self.particles, h=bandwidth)
@@ -470,9 +470,11 @@ class baseMAGISolver():
                             trajectories.append(self.clone(self.particles[:,:self.p]))
                             
                     if self.tensor_allsmall(grad_particles, self.particles, atol, rtol):
+                        pbar.update()
                         break
                     else:
                         self.gradient_step(opt, grad_particles, self.particles)
+                        pbar.update()
     
                 m = self.tensor_max(self.tensor_abs(grad_particles))
                 pbar.set_description(f'Split {i} finished with max grad = {m:.5f}')
