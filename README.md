@@ -8,8 +8,8 @@ To install with `pip`, use the command:
 > `pip install git+https://github.com/jamieliu2/magi_msvgd.git@main`
 
 # Dependencies
-> `numpy`
-> `scipy`
-> `scikit-learn`
-> `tqdm`
-> `torch` or `tensorflow`
+* `numpy`
+* `scipy`
+* `scikit-learn`
+* `tqdm`
+* `torch` or `tensorflow`
