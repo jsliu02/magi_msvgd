@@ -30,7 +30,7 @@ def discretize_data(sample, I, rounded=3):
 
 def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e-5):
     '''
-    Check manaul gradients against autograd. Returns scores in [0, 1] and the average maximum
+    Check manual gradients against autograd. Returns scores in [0, 1] and the average maximum
     asbolute distance between non-close gradients. May not give full score due to float imprecision.
     '''
     import torch
