@@ -35,24 +35,34 @@ def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e
     '''
     import torch
     x_score = 0
-    t_score = 0
+    theta_score = 0
     avg_max_x_diff = 0
-    avg_max_t_diff = 0
+    avg_max_theta_diff = 0
     for _ in trange(trials):
         X = torch.normal(0, 1, size=[n, D], requires_grad=True)
-        t = torch.normal(0, 1, size=[p], requires_grad=True)
-        time = torch.normal(0, 1, size=[1])
-        X.grad = None
-        t.grad = None
-        result = ode(X, t, time)
-        for i in range(result.shape[0]):
-            for j in range(result.shape[1]):
+        theta = torch.normal(0, 1, size=[p], requires_grad=True)
+        t = torch.normal(0, 1, size=[1])
+        
+        result = ode(X, theta, t)
+        
+        x_grads = []
+        theta_grads = []
+        
+        for j in range(result.shape[1]):
+            theta_j_grads = []
+            for i in range(result.shape[0]):
                 result[i,j].backward(retain_graph=True)
-        auto_x = X.grad
-        auto_t = t.grad
-    
-        x_grad = dfdx(X, t, time).sum(axis=2)
-        t_grad = dfdtheta(X, t, time).sum(axis=[0,2])
+                theta_j_grads.append(theta.grad)
+                theta.grad = None
+            x_grads.append(X.grad)
+            X.grad = None
+            theta_grads.append(theta_j_grads)
+            
+        auto_x = torch.stack(x_grads, axis=-1)
+        auto_t = torch.stack([torch.stack(th) for th in theta_grads], axis=-1)
+        
+        x_grad = dfdx(X, theta, t)
+        t_grad = dfdtheta(X, theta, t)
     
         if torch.allclose(auto_x, x_grad, atol=atol, rtol=rtol):
             x_score += 1
@@ -60,11 +70,11 @@ def check_gradients(ode, dfdx, dfdtheta, n, D, p, trials=100, atol=1e-8, rtol=1e
             avg_max_x_diff += torch.max(torch.abs(auto_x - x_grad))
             
         if torch.allclose(auto_t, t_grad, atol=atol, rtol=rtol):
-            t_score += 1
+            theta_score += 1
         else:
-            avg_max_t_diff += torch.max(torch.abs(auto_t - t_grad))
+            avg_max_theta_diff += torch.max(torch.abs(auto_t - t_grad))
 
     print(f"Average max X difference: {avg_max_x_diff / max(trials - x_score, 1)}")
-    print(f"Average max theta difference: {avg_max_t_diff / max(trials - t_score, 1)}")
+    print(f"Average max theta difference: {avg_max_theta_diff / max(trials - theta_score, 1)}")
     
-    return x_score / trials, t_score / trials
+    return x_score / trials, theta_score / trials
