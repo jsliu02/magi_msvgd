@@ -1,7 +1,7 @@
 # Description
 A Python package implementing mitotic Stein variational gradient descent for manifold-constrained Gaussian process inference.
 
-Accompanies Jamie Liu's undergraduate senior thesis.
+Accompanies Jamie Liu's undergraduate senior thesis, which is included as a PDF in this repository.
 
 # Installation
 To install with `pip`, use the command:
@@ -13,3 +13,6 @@ To install with `pip`, use the command:
 * `scikit-learn`
 * `tqdm`
 * `torch` or `tensorflow`
+
+# Documentation
+See Chapter 5.4 of the thesis PDF for package documentation and usage tutorial.
