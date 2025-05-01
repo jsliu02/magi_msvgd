@@ -18,4 +18,4 @@ To uninstall, use the command:
 * `torch` or `tensorflow`
 
 # Documentation
-See Chapter 5.4 of the thesis PDF for package documentation and usage tutorial.
+See Chapter 5.4 of the thesis PDF for package documentation and a usage tutorial.
