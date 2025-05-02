@@ -2,7 +2,7 @@
 A Python package implementing mitotic Stein variational gradient descent for manifold-constrained Gaussian process inference.
 
 Accompanies Jamie Liu's undergraduate senior thesis, which is included as a PDF in this repository.
-* Revision 1 fixed minor typos
+* Revision 1 fixes minor typos
 
 # Installation
 To install with `pip`, use the command:
