@@ -465,9 +465,8 @@ class baseMAGISolver():
         
                     if monitor_convergence and iteration % monitor_convergence == 0:
                         m = self.tensor_max(self.tensor_abs(grad_particles))
-                        if monitor_convergence:
-                            print(f'Iteration {iteration}, Max Grad = {m:.5f}')
-                            trajectories.append(self.clone(self.particles[:,:self.p]))
+                        print(f'Iteration {iteration}, Max Grad = {m:.5f}')
+                        trajectories.append(self.clone(self.particles[:,:self.p]))
                             
                     if self.tensor_allsmall(grad_particles, self.particles, atol, rtol):
                         pbar.update()
