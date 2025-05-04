@@ -66,7 +66,9 @@ def permute(tensor, permutation):
     return torch.permute(tensor, permutation)
 
 def square_distances(tensor):
-    return torch.cdist(tensor, tensor)**2
+    # faster than torch.cdist
+    diffs = tensor.tile(self.k, 1, 1) - tensor.unsqueeze(1)
+    return torch.sum(diffs**2, axis=2)
 
 def tensor_median(tensor):
     return torch.median(tensor)
