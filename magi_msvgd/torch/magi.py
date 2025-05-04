@@ -67,7 +67,7 @@ def permute(tensor, permutation):
 
 def square_distances(tensor):
     # faster than torch.cdist
-    diffs = tensor.tile(self.k, 1, 1) - tensor.unsqueeze(1)
+    diffs = tensor.tile(tensor.shape[0], 1, 1) - tensor.unsqueeze(1)
     return torch.sum(diffs**2, axis=2)
 
 def tensor_median(tensor):
