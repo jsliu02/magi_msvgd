@@ -312,7 +312,7 @@ class baseMAGISolver():
             self.particles = self.prepare_particles(mitosis)
             
     
-    def from_msvgd_vector(self, particles):
+    def from_svgd_vector(self, particles):
         '''
         *** HELPER METHOD: USER SAFE. ***
         
@@ -346,7 +346,7 @@ class baseMAGISolver():
         
         Compute MAGI posterior gradient.
         '''
-        Xs, thetas, sigmas = self.from_msvgd_vector(particles)
+        Xs, thetas, sigmas = self.from_svgd_vector(particles)
         if self.unknown_sigmas is not None:
             self.ksigmasq_inv = self.update_tensor(self.ksigmasq_inv, self.unknown_sigmas, self.permute(
                     self.tile(sigmas**-2, [self.n, 1, 1, 1]), [2, 3, 0, 1]))
@@ -484,7 +484,7 @@ class baseMAGISolver():
         # Xs: k x n x D
         # thetas: k x p
         # sigmas: k x n_unknown
-        Xs, thetas, sigmas = self.from_msvgd_vector(self.particles)
+        Xs, thetas, sigmas = self.from_svgd_vector(self.particles)
         
         if monitor_convergence:
             return Xs, thetas, sigmas, trajectories
