@@ -2,6 +2,7 @@ import numpy as np
 import scipy as sp
 from sklearn.gaussian_process import kernels as skl_kernels
 from tqdm.notebook import trange
+from collections.abc import Iterable
 '''
 Dependencies: numpy, scipy, sklearn, tqdm
 '''
@@ -214,3 +215,13 @@ def build_matrices(solver, v=2.01):
     # Compute and save matrices for all components
     solver.C_invs, solver.ms, solver.K_invs = [np.array(mats) for mats in \
                 zip(*[build_matrices_d(solver.I, phi[0], phi[1], v=2.01) for phi in solver.phis])] 
+
+def listify(val, length):
+    '''
+    Prepare a numerical/iterable argument for mitosis splits.
+    '''
+    if isinstance(val, Iterable) and type(val) is not dict:
+        if len(val) == length: return val
+        else: raise ValueError(f"Incorrect gradient descent hyperparameter argument length, got {len(val)}, expecting {length}.")
+    else:
+        return [val] * length

@@ -445,22 +445,33 @@ class baseMAGISolver():
         rtol (float) : stopping criterion -- relative tolerance for gradient elements
         bandwidth (float) : bandwidth for SVGD's RBF kernel, set to -1 for adaptive bandwidth
         monitor_convergence (int) : interval of descent steps at which to record particle state, set to 0 for no monitoring
-        ''' 
+        '''
+        optimizer = helpers.listify(optimizer, mitosis_splits+1)
+        optimizer_kwargs = helpers.listify(optimizer_kwargs, mitosis_splits+1)
+        max_iter = helpers.listify(max_iter, mitosis_splits+1)
+        atol = helpers.listify(atol, mitosis_splits+1)
+        rtol = helpers.listify(rtol, mitosis_splits+1)
+        bandwidth = helpers.listify(bandwidth, mitosis_splits+1)
+        
         if monitor_convergence:
             trajectories = []
         
-        for i in range(mitosis_splits+1):          
-            if optimizer_kwargs.pop('params', None):
-                opt = optimizer(params=[self.particles], **optimizer_kwargs)
-                optimizer_kwargs['params'] = True
+        for i in range(mitosis_splits+1):
+            bandwidth_i = bandwidth[i]
+            atol_i = atol[i]
+            rtol_i = rtol[i]
+            
+            if optimizer_kwargs[i].pop('params', None):
+                opt = optimizer[i](params=[self.particles], **optimizer_kwargs[i])
+                optimizer_kwargs[i]['params'] = True
             else:
-                opt = optimizer(**optimizer_kwargs)
+                opt = optimizer[i](**optimizer_kwargs[i])
 
-            with trange(max_iter) as pbar:
-                for iteration in range(max_iter):
+            with trange(max_iter[i]) as pbar:
+                for iteration in range(max_iter[i]):
                     grad_particles = -self.gradient(self.particles)
                     if not self.MAP:
-                        kxy, dxkxy = self.svgd_kernel(self.particles, h=bandwidth)
+                        kxy, dxkxy = self.svgd_kernel(self.particles, h=bandwidth_i)
                         grad_particles = (kxy @ grad_particles - dxkxy) / self.k
         
                     if monitor_convergence and iteration % monitor_convergence == 0:
@@ -468,7 +479,7 @@ class baseMAGISolver():
                         print(f'Iteration {iteration}, Max Grad = {m:.5f}')
                         trajectories.append(self.clone(self.particles[:,:self.p]))
                             
-                    if self.tensor_allsmall(grad_particles, self.particles, atol, rtol):
+                    if self.tensor_allsmall(grad_particles, self.particles, atol_i, rtol_i):
                         pbar.update()
                         break
                     else:
