@@ -22,7 +22,7 @@ class baseMAGISolver():
         ode (function, (Xs, thetas, t) -> n x D) : ODE system
         dfdx (function, (Xs, thetas, t) -> n x D x D) : gradient of ODE with respect to X
         dfdtheta (function, (Xs, thetas, t) -> n x p x D) : gradient of ODE with respect to theta
-        data (array, (n + 1) x D) : observed data, column 0 is the discretization index I, record NaN for unobserved points
+        data (array, n x (D+1)) : observed data, column 0 is the discretization index I, record NaN for unobserved points
         theta_guess (array, p) : initial guess for theta
 
         OPTIONAL:
