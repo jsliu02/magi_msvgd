@@ -19,4 +19,4 @@ To uninstall, use the command:
 * `torch` or `tensorflow`
 
 # Documentation
-See Chapter 5.4 of the thesis PDF for package documentation and a usage tutorial.
+See `magi_msvgd_documentation.pdf` for detailed documentation and a usage example. The same example is included in the full thesis, but the stand-alone documentation was re-written with the intent to provide a clear reference and guide for users and contains fixes, clarifications, and cleaner organization.
