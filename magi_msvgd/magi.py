@@ -4,22 +4,21 @@ jax.config.update('jax_enable_x64', True)
 import optax
 
 import numpy as np
-from scipy.spatial.distance import cdist
 from tqdm.notebook import trange
 
-from . import _helpers as helpers
+# from . import _helpers as helpers
+import _helpers as helpers
+
 '''
-Dependencies: jax, optax, numpy, scipy, sklearn, tqdm
+Dependencies: jax, optax, numpy, tqdm
+Additional helpers dependencies: jaxopt, scipy, sklearn
 '''
-class baseMAGISolver():
+class MAGISolver():
     def __init__(self, ode, data, theta_guess, dfdx=None, dfdtheta=None, sigmas=None,
                  theta_conf=0, X_guess=1, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
-                 prior_temperature='default', bayesian_sigma=True, init_dtype='float64'):
+                 prior_temperature='default', bayesian_sigma=True, init_dtype='float32'):
         '''
-        Initialization is all mostly in Numpy, and class variables are all stored as Numpy arrays.
-        This a polymorphic base class that can be used to build an SVGD module on many libraries.
-
-        Fitting theta and unobserved components is done using acceleration library via autograd.
+        Initializing theta and unobserved components is done using acceleration library via autograd.
 
         Xs : n x D
         thetas : p
@@ -44,10 +43,16 @@ class baseMAGISolver():
         pos_theta (bool) : whether to restrict theta to strictly positive values (PyTorch only)
         temper_prior (float) : prior tempering factor, default: beta = Dn/N
         bayesian_sigma (bool) : whether to give Bayesian treatment to sigma or fix at initial value
-        init_dtype (str or dtype) : data type to be used for initialization, default: float64
+        init_dtype (str or dtype) : data type to be used for initialization, default: float32
         '''
         # validate dtype
         _ = jnp.dtype(init_dtype)
+        self.init_dtype = init_dtype
+        init_device = jax.devices('cpu')[0]
+        self.init_device = init_device
+        # NOTE: we do initialization on the CPU since
+        ## (1) many required functions are CPU-only
+        ## (2) initializations are relatively non-parallel
 
         # save ode function and its gradients, as well as map versions that apply over dim 0
         # use mapped version to apply to the entire batch of particles
@@ -55,7 +60,8 @@ class baseMAGISolver():
 
         # ode: -> 1 x D
         # mapode: -> k x n x D
-        self.mapode = jax.vmap(jax.vmap(ode, in_axes=(0, None, 0), in_axes=(0, 0, None))
+        self.ode = jax.vmap(ode, in_axes=(0, None, 0))
+        self.mapode = jax.vmap(self.ode, in_axes=(0, 0, None))
 
         # dfdx: -> n x D x D
         # mapdfdx: -> k x n x D x D
@@ -63,7 +69,7 @@ class baseMAGISolver():
             mapdfdx = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=0), in_axes=(0, None, 0)), in_axes=(0, 0, None))
             self.mapdfdx = lambda X, theta, t: jnp.permute_dims(mapdfdx(X, theta, t), [0, 1, 3, 2])
         else:
-            self.mapdfdx = jax.vmap(jax.vmap(dfdx, in_axes=(0, None, 0), in_axes=(0, 0, None))
+            self.mapdfdx = jax.vmap(jax.vmap(dfdx, in_axes=(0, None, 0)), in_axes=(0, 0, None))
 
         # dfdtheta: -> n x p x D
         # mapdfdtheta: -> k x n x p x D
@@ -71,16 +77,16 @@ class baseMAGISolver():
             mapdfdtheta = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=1), in_axes=(0, None, 0)), in_axes=(0, 0, None))
             self.mapdfdtheta = lambda X, theta, t: jnp.permute_dims(mapdfdtheta(X, theta, t), [0, 1, 3, 2])
         else:
-            self.mapdfdtheta = jax.vmap(jax.vmap(dfdtheta, in_axes=(0, None, 0), in_axes=(0, 0, None))
+            self.mapdfdtheta = jax.vmap(jax.vmap(dfdtheta, in_axes=(0, None, 0)), in_axes=(0, 0, None))
 
         # I: n x 1
-        self.I = jnp.array(data[:,0], dtype=init_dtype).reshape(-1, 1)
+        self.I = jnp.array(data[:,0], dtype=init_dtype, device=init_device).reshape(-1, 1)
 
         # x_init: n x D
         # contains NaNs where unobserved, will later be filled
         # we do not need to store raw y, since we use boolean mask tau and x_init
         # to be replicated to k x D x n x 1 later
-        self.x_init = jnp.array(data[:,1:], dtype=init_dtype)
+        self.x_init = jnp.array(data[:,1:], dtype=init_dtype, device=init_device)
 
         # number of discretization points
         self.n = self.I.shape[0]
@@ -88,18 +94,18 @@ class baseMAGISolver():
         self.D = self.x_init.shape[1]
 
         # theta guess for initialization
-        self.theta_guess = jnp.array(theta_guess, dtype=init_dtype)
+        self.theta_guess = jnp.array(theta_guess, dtype=init_dtype, device=init_device)
         # confidence level:
             # positive to force theta toward guess
             # negative to force theta away from guess
-        self.theta_conf = jnp.array(theta_conf, dtype=init_dtype)
+        self.theta_conf = jnp.array(theta_conf, dtype=init_dtype, device=init_device)
         # number of parameters in theta
         self.p = len(theta_guess)
 
         self.X_guess = X_guess
 
         # boolean mask for observed data
-        tau = np.isfinite(self.x_init)
+        tau = jnp.isfinite(self.x_init)
 
         # number of data observations, shape = (D,)
         self.Ns = tau.sum(axis=0)
@@ -116,9 +122,9 @@ class baseMAGISolver():
         self.phis = [None] * self.D
         if sigmas is None:
             self.sigmas = jnp.zeros(self.D)
-            self.unknown_sigmas = jnp.arange(self.D, dtype=init_dtype)
+            self.unknown_sigmas = jnp.arange(self.D, dtype=init_dtype, device=init_device)
         else:
-            self.sigmas = jnp.array(sigmas, dtype=float)
+            self.sigmas = jnp.array(sigmas, dtype=init_dtype, device=init_device)
             self.unknown_sigmas = jnp.where((1 - (self.sigmas > 0)) * (self.Ns > 2))[0]
             if len(self.unknown_sigmas) == 0:
                 self.unknown_sigmas = None
@@ -135,7 +141,7 @@ class baseMAGISolver():
         helpers.fit_phisigma(self, v=2.01)
 
         # phis: D x 2
-        self.phis = jnp.array(self.phis, dtype=init_dtype)
+        self.phis = jnp.array(self.phis, dtype=init_dtype, device=init_device)
         # sigmas: D x 1 -> to be replicated to k x D x n x 1 later
         self.sigmas = self.sigmas.reshape(-1, 1)
 
@@ -145,11 +151,11 @@ class baseMAGISolver():
         # set GP mean priors
         # mu, mu_dot: n x D -> to be replicated to k x D x n x 1 later
         if mu is not None:
-            self.mu = jnp.array(mu, dtype=init_dtype)
-            self.mu_dot = jnp.array(mu_dot, dtype=init_dtype)
+            self.mu = jnp.array(mu, dtype=init_dtype, device=init_device)
+            self.mu_dot = jnp.array(mu_dot, dtype=init_dtype, device=init_device)
         else:
-            self.mu = jnp.zeros([self.n, self.D])
-            self.mu_dot = jnp.zeros([self.n, self.D])
+            self.mu = jnp.zeros([self.n, self.D], dtype=init_dtype, device=init_device)
+            self.mu_dot = jnp.zeros([self.n, self.D], dtype=init_dtype, device=init_device)
 
         self.pos_X = pos_X
         self.pos_theta = pos_theta
@@ -326,7 +332,8 @@ class baseMAGISolver():
 
         Compute SVGD kernel.
         '''
-        L2sq = jnp.array(cdist(particles), dtype=self.dtype, device=self.device)
+        # compute squared pairwise distances
+        L2sq = helpers.pairwise_sq_distances(particles, particles)
         if h <= 0:
             h = jnp.median(L2sq) / self.logk
 
@@ -339,19 +346,20 @@ class baseMAGISolver():
         return Kxy, dxkxy
 
 
-    def mitotic_split(self, opt, grad_particles):
+    def mitotic_split(self, optimizer, opt_state, grad_particles):
         '''
         *** HELPER METHOD: USER SAFE BUT SHOULD NOT BE CALLED. ***
-        
+
         Perform mitotic split for mSVGD.
         '''
         old_particles = self.particles.copy()
-        self.gradient_step(opt, grad_particles, self.particles)
-        new_particles = self.concat([old_particles, self.particles], axis=0)
-        self.initialize_particles(2*self.k, self.dtype, self.device, init_sd=None, mitosis=new_particles)
+        updates, opt_state = optimizer.update(grad_particles, opt_state)
+        self.particles = optax.apply_updates(params, updates)
+        new_particles = jnp.concat([old_particles, self.particles], axis=0)
+        self.initialize_particles(k_0=2*self.k, init_sd=None, dtype=self.dtype, device=self.device, mitosis=new_particles)
 
-        
-    def solve(self, optimizer, optimizer_kwargs=dict(), max_iter=10_000, mitosis_splits=0,
+
+    def solve(self, optimizer_kwargs={'learning_rate':0.03}, max_iter=10_000, mitosis_splits=0,
               atol=1e-2, rtol=1e-8, bandwidth=-1, monitor_convergence=False):
         '''
         This is a descent problem, so optimizers should be configured to minimize.
@@ -374,20 +382,17 @@ class baseMAGISolver():
         atol = helpers.listify(atol, mitosis_splits+1)
         rtol = helpers.listify(rtol, mitosis_splits+1)
         bandwidth = helpers.listify(bandwidth, mitosis_splits+1)
-        
+
         if monitor_convergence:
             trajectories = []
-        
+
         for i in range(mitosis_splits+1):
             bandwidth_i = bandwidth[i]
             atol_i = atol[i]
             rtol_i = rtol[i]
-            
-            if optimizer_kwargs[i].pop('params', None):
-                opt = optimizer[i](params=[self.particles], **optimizer_kwargs[i])
-                optimizer_kwargs[i]['params'] = True
-            else:
-                opt = optimizer[i](**optimizer_kwargs[i])
+
+            optimizer = optax.adam(**optimizer_kwargs[i])
+            opt_state = optimizer.init(self.particles)
 
             with trange(max_iter[i]) as pbar:
                 for iteration in range(max_iter[i]):
@@ -395,30 +400,33 @@ class baseMAGISolver():
                     if not self.MAP:
                         kxy, dxkxy = self.svgd_kernel(self.particles, h=bandwidth_i)
                         grad_particles = (kxy @ grad_particles - dxkxy) / self.k
-        
+
+                    # update trajectory tracking
                     if monitor_convergence and iteration % monitor_convergence == 0:
-                        m = self.tensor_max(self.tensor_abs(grad_particles))
+                        m = jnp.max(jnp.abs(grad_particles))
                         print(f'Iteration {iteration}, Max Grad = {m:.5f}')
-                        trajectories.append(self.clone(self.particles[:,:self.p]))
-                            
-                    if self.tensor_allsmall(grad_particles, self.particles, atol_i, rtol_i):
+                        trajectories.append(self.particles[:,:self.p].copy())
+
+                    # check for convergence
+                    if jnp.all(jnp.abs(grad_particles) <= atol_i + rtol_i * jnp.abs(self.particles)):
                         pbar.update()
                         break
                     else:
-                        self.gradient_step(opt, grad_particles, self.particles)
+                        updates, opt_state = optimizer.update(grad_particles, opt_state)
+                        self.particles = optax.apply_updates(params, updates)
                         pbar.update()
-    
-                m = self.tensor_max(self.tensor_abs(grad_particles))
+
+                m = jnp.max(jnp.abs(grad_particles))
                 pbar.set_description(f'Split {i} finished with max grad = {m:.5f}')
 
             if i < mitosis_splits:
                 self.mitotic_split(opt, grad_particles)
-            
+
         # Xs: k x n x D
         # thetas: k x p
         # sigmas: k x n_unknown
         Xs, thetas, sigmas = self.from_svgd_vector(self.particles)
-        
+
         if monitor_convergence:
             return Xs, thetas, sigmas, trajectories
         else:
