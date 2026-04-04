@@ -35,7 +35,7 @@ class MAGISolver():
         OPTIONAL:
         dfdx (function, (Xs, thetas, t) -> n x D x D) : gradient of ODE with respect to X (autograd if not provided)
         dfdtheta (function, (Xs, thetas, t) -> n x p x D) : gradient of ODE with respect to theta (autograd if not provided)
-        sigmas (array or None) : observation noise standard deviation, if known; individual entries can be set to None
+        sigmas (array or None) : observation noise standard deviation (if known); individual entries can be set to nan
         theta_conf (float or array) : confidence in initial guess for theta, larger theta_conf will pull theta initialization toward guess
         X_guesses (int) : number of times to run X initialization procedure, can give more stable results
         unobs_init_iters (int) : number of Adam steps when solving for initialization of theta and unobserved components
@@ -53,8 +53,8 @@ class MAGISolver():
         init_device = jax.devices('cpu')[0]
         self.init_device = init_device
         # NOTE: we do initialization on the CPU since
-        ## (1) many required functions are CPU-only
-        ## (2) initializations are relatively non-parallel
+        ## initializations are relatively non-parallel and seem to be faster on CPU
+        ## TODO: test on beefier hardware (if GPU outperforms, add user-facing toggle switch)
 
         # save ode function and its gradients, as well as map versions that apply over dim 0
         # use mapped version to apply to the entire batch of particles

@@ -20,12 +20,13 @@ def initialize_obs(observed_components, tau, I, x_init):
     Fill X for observed data via linear interpolation.
     '''
     # iterate over only observed components
-    for d in observed_components:
+    def loop(i, x_init):
         # filter for dimension d
+        d = observed_components[i]
         tau_d = tau[d]
         x_d = x_init[:, d]
 
-        # now we have to do some tricks to make this JIT compatible
+        # now we have to do some tricks to make linear interpolation JIT compatible
 
         # sort I and x_d to put all non-nans at front
         I_modif = jnp.where(tau_d, I.flatten(), jnp.inf)
@@ -46,6 +47,9 @@ def initialize_obs(observed_components, tau, I, x_init):
         # linear interpolation of observations
         x_init_d = jnp.interp(I.flatten(), padded_I, padded_x_d)
         x_init = x_init.at[:,d].set(x_init_d)
+        return x_init
+
+    x_init = jax.lax.fori_loop(0, observed_components.shape[0], loop, x_init)
     return x_init
 
 def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_guess_init, X_guesses,
@@ -81,7 +85,7 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
         return ode_mse + theta_mse
 
     grad_obj = jax.grad(objective)
-    x_guess_init = jnp.full(shape=(x_init.shape[0], len(unobserved_components)), fill_value=jnp.nanmean(x_init))
+    x_guess_init = jnp.full(shape=(x_init.shape[0], unobserved_components.shape[0]), fill_value=jnp.nanmean(x_init))
     params = (x_guess_init, theta_guess_init)
     optimizer = optax.adam(learning_rate=0.01)
 
@@ -109,8 +113,8 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
 
     x_guessed, theta_init = params
     x_init = x_init.at[:,unobserved_components].set(x_guessed)
-    # set sigma for unobserved components to -1 so we don't try to fit them later
-    sigmas = sigmas.at[unobserved_components].set(-1)
+    # set sigma for unobserved components to 0 so we don't try to fit them later
+    sigmas = sigmas.at[unobserved_components].set(0.0)
     return x_init, theta_init, sigmas
 
 def fit_phisigma(I, x_init, phis, sigmas):
@@ -143,11 +147,10 @@ def fit_phisigma(I, x_init, phis, sigmas):
         phis, sigmas = targets
 
         y_d = x_init[:, d]
-        # note jax fft only works on CPU
         z = jnp.fft.fft(y_d)
         zmod = jnp.abs(z)
-        zmod_effective_sq = zmod[1:(len(zmod) - 1) // 2 + 1]**2
-        idxs = jnp.linspace(1, len(zmod_effective_sq), len(zmod_effective_sq), dtype=y_d.dtype)
+        zmod_effective_sq = zmod[1:(zmod.shape[0] - 1) // 2 + 1]**2
+        idxs = jnp.linspace(1,  zmod_effective_sq.shape[0], zmod_effective_sq.shape[0], dtype=y_d.dtype)
         freq = jnp.sum(idxs * zmod_effective_sq) / jnp.sum(zmod_effective_sq)
         mu_phi2 = 0.5 / freq
         sig_phi2 = (I_max - mu_phi2) / 3
@@ -161,19 +164,20 @@ def fit_phisigma(I, x_init, phis, sigmas):
             return fitted
 
         def known_sigma(sigma_d, mu_phi2, sig_phi2, y_d):
-            objective = lambda log_phi: target(log_phi, sigma_d, mu_phi2, sig_phi2, y_d)
+            objective = lambda log_phi: target(log_phi, jnp.log(sigma_d), mu_phi2, sig_phi2, y_d)
             result = jsp_optimize.minimize(objective, x0=jnp.zeros(2, dtype=x_init.dtype), method="BFGS")
             fitted = jnp.exp(result.x)
             return jnp.array([*fitted, sigma_d], dtype=x_init.dtype)
 
-        fitted = jax.lax.cond((~sigma_d.astype(bool)) | jnp.isnan(sigma_d) | (sigma_d < 0),
+        # note: sigma_d = 0 indicates known zero-variance data or unobserved component
+        fitted = jax.lax.cond(jnp.isnan(sigma_d) | (sigma_d < 0),
                              unknown_sigma, known_sigma,
                              *[sigma_d, mu_phi2, sig_phi2, y_d])
         phis = phis.at[d].set(fitted[:2])
         sigmas = sigmas.at[d].set(fitted[2])
         return phis, sigmas
 
-    targets = jax.lax.fori_loop(0, x_init.shape[0], loop, targets)
+    targets = jax.lax.fori_loop(0, x_init.shape[1], loop, targets)
     return targets
 
 def build_matrices(I, phis):
@@ -257,7 +261,7 @@ def build_matrices(I, phis):
     full_matrices = jax.lax.fori_loop(0, phis.shape[0], loop, matrices)
     return full_matrices
 
-@partial(jax.jit, static_argnames=['ode'])
+# @partial(jax.jit, static_argnames=['ode'])
 def run_initialization(ode, x_init, I, tau, sigmas, phis, observed_components, unobserved_components,
                        theta_conf, theta_guess_init, X_guesses, unobs_init_iters=500):
     x_init = initialize_obs(observed_components, tau, I, x_init)
