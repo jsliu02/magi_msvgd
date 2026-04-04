@@ -261,7 +261,7 @@ def build_matrices(I, phis):
     full_matrices = jax.lax.fori_loop(0, phis.shape[0], loop, matrices)
     return full_matrices
 
-# @partial(jax.jit, static_argnames=['ode'])
+@partial(jax.jit, static_argnames=['ode'])
 def run_initialization(ode, x_init, I, tau, sigmas, phis, observed_components, unobserved_components,
                        theta_conf, theta_guess_init, X_guesses, unobs_init_iters=500):
     x_init = initialize_obs(observed_components, tau, I, x_init)
