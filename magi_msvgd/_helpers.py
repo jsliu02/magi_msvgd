@@ -1,39 +1,57 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
-# from jaxopt import ScipyBoundedMinimize
-import numpy as np
-import scipy as sp
+from jax.scipy import optimize as jsp_optimize # note: may eventually change this to use Optimistix
 import optax
-from sklearn.gaussian_process import kernels as skl_kernels
-from tqdm.notebook import trange
+from _matern_jax import matern_2p5, kvp_2p5
+from functools import partial
+from jax.tree_util import Partial
 from collections.abc import Iterable
 '''
-Dependencies: jax, optax, numpy, scipy, sklearn, tqdm
+Dependencies: jax, optax
 '''
 
-def initialize_obs(solver):
+##########################################################
+############# Initialization-related Helpers #############
+##########################################################
+
+def initialize_obs(observed_components, tau, I, x_init):
     '''
     Fill X for observed data via linear interpolation.
-    Modifies in place.
     '''
     # iterate over only observed components
-    for d in solver.observed_components:
+    for d in observed_components:
         # filter for dimension d
-        tau_d = solver.tau[d]
-        I_d = solver.I[tau_d].flatten()
-        y_d = solver.x_init[tau_d, d].flatten()
+        tau_d = tau[d]
+        x_d = x_init[:, d]
+
+        # now we have to do some tricks to make this JIT compatible
+
+        # sort I and x_d to put all non-nans at front
+        I_modif = jnp.where(tau_d, I.flatten(), jnp.inf)
+        sort_idx = jnp.argsort(I_modif)
+        sorted_I = I_modif[sort_idx]
+        sorted_x_d = x_d[sort_idx]
+
+        # dynamically find last non-nan index
+        num_valid = jnp.sum(tau_d)
+        last_valid_idx = jnp.maximum(0, num_valid-1)
+        last_valid_I = sorted_I[last_valid_idx]
+        last_valid_x = sorted_x_d[last_valid_idx]
+
+        # replace the nans with the last valid to make them do nothing in interp
+        padded_I = jnp.where(jnp.isinf(sorted_I), last_valid_I, sorted_I)
+        padded_x_d = jnp.where(~jnp.isfinite(sorted_x_d), last_valid_x, sorted_x_d)
 
         # linear interpolation of observations
-        x_init_d = jnp.interp(solver.I.flatten(), I_d, y_d)
-        solver.x_init = solver.x_init.at[:,d].set(x_init_d)
+        x_init_d = jnp.interp(I.flatten(), padded_I, padded_x_d)
+        x_init = x_init.at[:,d].set(x_init_d)
+    return x_init
 
-def initialize_unobs(solver):
+def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_guess_init, X_guesses,
+                     unobs_init_iters, sigmas):
     '''
     Fit X for unobserved components and fit theta.
-    Modifies in place.
-
-    Partially JIT compiled (gradient of objective).
     '''
     def objective(params):
         '''
@@ -43,170 +61,148 @@ def initialize_unobs(solver):
         '''
         x_guess, theta_guess = params
 
-        full_x = solver.x_init.copy()
-        full_x = full_x.at[:,solver.unobserved_components].set(x_guess)
+        full_x = x_init
+        full_x = full_x.at[:, unobserved_components].set(x_guess)
 
         # X'(t) = f(x, theta)
-        f_vals = solver.ode(full_x, theta_guess, solver.I)
+        f_vals = ode(full_x, theta_guess, I)
 
         # X'(t) ~ (X(t + dt) - X(t - dt)) / (2*dt)
         # X'(t) ~ X(t + dt) / dt
-        diff_first = jnp.reshape((full_x[1] - full_x[0]) / (solver.I[1] - solver.I[0]), [1,-1])
-        diffs_mid = (full_x[2:] - full_x[:-2]) / (solver.I[2:] - solver.I[:-2])
-        diff_last = jnp.reshape((full_x[-1] - full_x[-2]) / (solver.I[-1] - solver.I[-2]), [1,-1])
+        diff_first = jnp.reshape((full_x[1] - full_x[0]) / (I[1] - I[0]), [1,-1])
+        diffs_mid = (full_x[2:] - full_x[:-2]) / (I[2:] - I[:-2])
+        diff_last = jnp.reshape((full_x[-1] - full_x[-2]) / (I[-1] - I[-2]), [1,-1])
         f_diffs = jnp.concat([diff_first, diffs_mid, diff_last], axis=0)
 
         # minimize L2 loss of guess's numerical derivatives, plus an attraction term to adjust theta
         # useful for cases where one of the thetas being zero would force the guess into a flat line
         ode_mse = jnp.mean((f_vals - f_diffs)**2, axis=None)
-        theta_mse = jnp.mean(solver.theta_conf * (theta_guess - solver.theta_guess)**2, axis=None)
+        theta_mse = jnp.mean(theta_conf * (theta_guess - theta_guess_init)**2, axis=None)
         return ode_mse + theta_mse
 
-    grad_obj = jax.jit(jax.value_and_grad(objective))
-    x_guess_init = jnp.full(shape=(solver.n, len(solver.unobserved_components)), fill_value=jnp.nanmean(solver.x_init),
-                           dtype=solver.init_dtype, device=solver.init_device)
-    for i in range(solver.X_guess):
-        x_guess0 = x_guess_init
-        theta_guess0 = solver.theta_guess.copy()
+    grad_obj = jax.grad(objective)
+    x_guess_init = jnp.full(shape=(x_init.shape[0], len(unobserved_components)), fill_value=jnp.nanmean(x_init))
+    params = (x_guess_init, theta_guess_init)
+    optimizer = optax.adam(learning_rate=0.01)
 
-        params = [x_guess0, theta_guess0]
-        optimizer = optax.adam(learning_rate=0.01)
+    def loop_inner(i, inner_params):
+        x_guess, theta_guess, opt_state = inner_params
+        params = (x_guess, theta_guess)
+
+        grads = grad_obj(params)
+        updates, opt_state = optimizer.update(grads, opt_state)
+
+        params = optax.apply_updates(params, updates)
+        return *params, opt_state
+
+    def loop_outer(i, params):
+        x_guess, theta_guess = params
+        params = (x_guess, theta_guess_init)
         opt_state = optimizer.init(params)
-        last_loss = 0
-        for j in trange(10_000, desc="Computing X_unobs and theta initialization"):
-            loss, grads = grad_obj(params)
-            updates, opt_state = optimizer.update(grads, opt_state)
-            params = optax.apply_updates(params, updates)
-            # set a stopping condition if loss decreases by <= 0.1
-            if j % 200 == 0:
-                if jnp.abs(last_loss - loss) <= 0.1:
-                    break
-                else:
-                    last_loss = loss
-        x_guess_init = params[0]
 
-    # store the solved starting state guesses
-    solver.x_init = solver.x_init.at[:,solver.unobserved_components].set(params[0])
-    solver.theta_init = params[1]
+        inner_params = jax.lax.fori_loop(0, unobs_init_iters, loop_inner,
+                                   (*params, opt_state))
+        x_guess, theta_guess, opt_state = inner_params
+        return x_guess, theta_guess
 
+    params = jax.lax.fori_loop(0, X_guesses, loop_outer, params)
+
+    x_guessed, theta_init = params
+    x_init = x_init.at[:,unobserved_components].set(x_guessed)
     # set sigma for unobserved components to -1 so we don't try to fit them later
-    solver.sigmas = solver.sigmas.at[solver.unobserved_components].set(-1)
+    sigmas = sigmas.at[unobserved_components].set(-1)
+    return x_init, theta_init, sigmas
 
-def pairwise_sq_distances(x, y):
-    return jnp.sum((x[:, jnp.newaxis, :] - y[jnp.newaxis, :, :])**2, axis=-1)
-
-# def Matern(x, y, phi1, phi2, v):
-#     def _matern(r, phi2):
-#         def _scipy_matern(r, phi2):
-#             r = np.where(r == 0, 1e-10, r)  # avoid 0 in bessel
-#             s = np.sqrt(2 * v) * r / phi2
-#             return (2 ** (1 - v) / sp.special.gamma(v)
-#                     * s ** v * sp.special.kv(v, s))
-#         return jax.pure_callback(
-#             lambda r: _scipy_matern(r).astype(r.dtype),
-#             jax.ShapeDtypeStruct(r.shape, r.dtype), r, phi2)
-#     r = jnp.sqrt(pairwise_sq_distances(x, y))
-#     return phi1 * _matern(r, phi2)
-
-class MaternKernel():
-    '''
-    Struggling to write Matern Kernel purely in JAX. The above implementation (commented out)
-    works, but does not play well with jaxopt.ScipyBoundedMinimize, which is used to solve for
-    phi and sigma. Reverted to sklearn + scipy implementation.
-    '''
-    def __init__(self, phi1, phi2, v):
-        self.skl_kernel = phi1 * skl_kernels.Matern(length_scale=phi2, nu=v)
-    def eval(self, x, y=None):
-        if y is None:
-            y = x
-        return self.skl_kernel(x, y)
-
-def fit_phisigma(solver, v=2.01):
+def fit_phisigma(I, x_init, phis, sigmas):
     '''
     Fit phi and sigma for all components via scipy numerical optimization.
-    Modifies in place.
-
-    Not JIT compiled. Trying to do so was an enormous mess.
     '''
-    I = np.array(solver.I)
     I_max = I.max()
-    Id_n = np.identity(I.shape[0])
+    Id_n = jnp.identity(I.shape[0], dtype=I.dtype)
 
-    def neglogprob(phi, sigma_d, mu_phi2, sig_phi2, y_d):
+    def neglogprob(phi, sigma, mu_phi2, sig_phi2, y_d):
         '''
-        phi[0] : phi1
-        phi[1] : phi2
-        sigma : (optional) sigma
-
-        Target negative log density for fitting phi1, phi2, and sigma
+        Target negative log density for fitting phi1, phi2, and sigma for a single component.
         '''
-        Kappa_phi = MaternKernel(phi1=phi[0], phi2=phi[1], v=v)
-        cov = Kappa_phi.eval(I) + Id_n * sigma_d**2
+        cov = matern_2p5(I, I, phi1=phi[0], phi2=phi[1]) + Id_n * sigma**2
 
         t1 = (phi[1] - mu_phi2)**2 / sig_phi2**2
-        t2 = 2 * np.sum(jnp.log(np.diag(np.linalg.cholesky(cov))))
-        t3 = y_d @ np.linalg.solve(cov, y_d)
+        t2 = 2 * jnp.sum(jnp.log(jnp.diag(jnp.linalg.cholesky(cov))))
+        t3 = y_d @ jnp.linalg.solve(cov, y_d)
         return  0.5 * (t1 + t2 + t3)
 
-    solver.x_init = np.array(solver.x_init)
-    for d in range(solver.D):
-        y_d = solver.x_init[:, d]
+    def target(log_phi, log_sigma, mu_phi2, sig_phi2, y_d):
+        '''
+        Note that there is currently no JIT-compatible way to do constrained optimization,
+        so we log-parametrize to force the learned phi1, phi2, sigma to be positive
+        '''
+        return neglogprob(jnp.exp(log_phi), jnp.exp(log_sigma), mu_phi2, sig_phi2, y_d)
 
-        # set phi_2 prior
+    targets = (phis, sigmas)
+    def loop(d, targets):
+        phis, sigmas = targets
+
+        y_d = x_init[:, d]
         # note jax fft only works on CPU
-        z = sp.fft.fft(y_d)
-        zmod = np.abs(z)
+        z = jnp.fft.fft(y_d)
+        zmod = jnp.abs(z)
         zmod_effective_sq = zmod[1:(len(zmod) - 1) // 2 + 1]**2
-        idxs = np.linspace(1, len(zmod_effective_sq), len(zmod_effective_sq))
-        freq = np.sum(idxs * zmod_effective_sq) / jnp.sum(zmod_effective_sq)
-        mu_phi2 = 0.5 / freq; sig_phi2 = (I_max - mu_phi2) / 3
+        idxs = jnp.linspace(1, len(zmod_effective_sq), len(zmod_effective_sq), dtype=y_d.dtype)
+        freq = jnp.sum(idxs * zmod_effective_sq) / jnp.sum(zmod_effective_sq)
+        mu_phi2 = 0.5 / freq
+        sig_phi2 = (I_max - mu_phi2) / 3
 
-        # use scipy.optimize to fit phi and sigma
-        # fit based on interpolated points, rather than only observed points
-        # method = 'Nelder-Mead'
-        method = 'Nelder-Mead'
-        sigma_d = solver.sigmas[d]
+        sigma_d = sigmas[d]
 
-        if (not sigma_d) or (sigma_d != sigma_d) or (sigma_d < 0):
-            # fit sigma if it is not specified
-            target = lambda phisigma: neglogprob(phisigma[:2], phisigma[2], mu_phi2, sig_phi2, y_d)
-            fitted = sp.optimize.minimize(target, x0=np.ones(3), bounds=[(1e-10, np.inf)]*3, method=method).x
-            solver.phis[d] = fitted[:2]
-            solver.sigmas = solver.sigmas.at[d].set(fitted[2])
-        else:
-            # fit just phi, holding sigma constant
-            target = lambda phi: neglogprob(phi, sigma_d, mu_phi2, sig_phi2, y_d)
-            fitted = sp.optimize.minimize(target, x0=np.ones(2),
-                                          bounds=[(1e-10, np.inf)]*2, method=method).x
-            solver.phis[d] = fitted
+        def unknown_sigma(sigma_d, mu_phi2, sig_phi2, y_d):
+            objective = lambda log_phisigma: target(log_phisigma[:2], log_phisigma[2], mu_phi2, sig_phi2, y_d)
+            result = jsp_optimize.minimize(objective, x0=jnp.zeros(3, dtype=x_init.dtype), method="BFGS")
+            fitted = jnp.exp(result.x)
+            return fitted
 
-def kvp(v, z, n):
-    result_shape = jax.ShapeDtypeStruct(z.shape, z.dtype)
-    return jax.pure_callback(lambda v, z, n: sp.special.kvp(v=v, z=z, n=n).astype(z.dtype), result_shape, v, z, n)
+        def known_sigma(sigma_d, mu_phi2, sig_phi2, y_d):
+            objective = lambda log_phi: target(log_phi, sigma_d, mu_phi2, sig_phi2, y_d)
+            result = jsp_optimize.minimize(objective, x0=jnp.zeros(2, dtype=x_init.dtype), method="BFGS")
+            fitted = jnp.exp(result.x)
+            return jnp.array([*fitted, sigma_d], dtype=x_init.dtype)
 
-def build_matrices(solver, v=2.01):
+        fitted = jax.lax.cond((~sigma_d.astype(bool)) | jnp.isnan(sigma_d) | (sigma_d < 0),
+                             unknown_sigma, known_sigma,
+                             *[sigma_d, mu_phi2, sig_phi2, y_d])
+        phis = phis.at[d].set(fitted[:2])
+        sigmas = sigmas.at[d].set(fitted[2])
+        return phis, sigmas
+
+    targets = jax.lax.fori_loop(0, x_init.shape[0], loop, targets)
+    return targets
+
+def build_matrices(I, phis):
     '''
     Construct GP matrices and inverses.
     '''
-    @jax.jit
-    def build_matrices_d(I, phi1, phi2, v=v):
+    def build_matrices_d(I, phi1, phi2):
         '''
         Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
         - I is an jnp.array of discretized timesteps, phi1 & phi2 are floats.
 
         Credit: Skyler Wu
         '''
+        # fix degrees of freedom at 2.5 for easy Matern kernel computation
+        v = jnp.array(2.5, dtype=I.dtype) # strong typing to ensure gamma function returns correct type
+
         # tile appropriately to facilitate vectorization
-        s = jnp.tile(A=I, reps=I.shape[0]); t = s.T
+        s = jnp.tile(A=I, reps=I.shape[0])
+        t = s.T
 
         # l = |s-t|, u = sqrt(2*nu) * l / phi2 - let's nan out diagonals to avoid imprecision errors.
-        l = jnp.abs(s - t); u = jnp.sqrt(2*v) * l / phi2
+        l = jnp.abs(s - t)
+        u = jnp.sqrt(2*v) * l / phi2
         u = jnp.fill_diagonal(a=u, val=jnp.nan, inplace=False)
 
         # pre-compute Bessel function + derivatives
-        Bv0 = kvp(v=v, z=u, n=0)
-        Bv1 = kvp(v=v, z=u, n=1)
-        Bv2 = kvp(v=v, z=u, n=2)
+        Bv0 = kvp_2p5(z=u, n=0)
+        Bv1 = kvp_2p5(z=u, n=1)
+        Bv2 = kvp_2p5(z=u, n=2)
 
         # 1. Kappa itself, but we need to correct everywhere with l=|s-t|=0 to have value exp(0.0) = 1.0
         Kappa = (phi1/jsp.special.gamma(v)) * (2 ** (1 - (v/2))) * ((jnp.sqrt(v) / phi2) ** v)
@@ -237,17 +233,46 @@ def build_matrices(solver, v=2.01):
         Kappa_pp = jnp.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) ), inplace=False) # behavior as |s-t| \to 0^+
 
         # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
-        C_d_inv = jnp.linalg.pinv(Kappa)
+        C_d_inv = jnp.linalg.solve(Kappa, jnp.eye(Kappa.shape[0], dtype=Kappa.dtype))
         m_d = p_Kappa @ C_d_inv
         K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
-        K_d_inv = jnp.linalg.inv(K_d)
+        K_d_inv = jnp.linalg.solve(K_d, jnp.eye(K_d.shape[0], dtype=K_d.dtype))
 
         # 6. return our three matrices
         return C_d_inv, m_d, K_d_inv
 
-    # Compute and save matrices for all components
-    solver.C_invs, solver.ms, solver.K_invs = [jnp.array(mats, dtype=solver.init_dtype, device=solver.init_device) for mats in \
-                zip(*[build_matrices_d(solver.I, phi[0], phi[1], v=2.01) for phi in solver.phis])]
+    C_invs = jnp.zeros([phis.shape[0], I.shape[0], I.shape[0]], dtype=phis.dtype)
+    ms = jnp.zeros([phis.shape[0], I.shape[0], I.shape[0]], dtype=phis.dtype)
+    K_invs = jnp.zeros([phis.shape[0], I.shape[0], I.shape[0]], dtype=phis.dtype)
+
+    matrices = (C_invs, ms, K_invs)
+    def loop(d, matrices):
+        C_invs, ms, K_invs = matrices
+        result = build_matrices_d(I, phis[d,0], phis[d,1])
+        C_invs = C_invs.at[d].set(result[0])
+        ms = ms.at[d].set(result[1])
+        K_invs = K_invs.at[d].set(result[2])
+        return C_invs, ms, K_invs
+
+    full_matrices = jax.lax.fori_loop(0, phis.shape[0], loop, matrices)
+    return full_matrices
+
+@partial(jax.jit, static_argnames=['ode'])
+def run_initialization(ode, x_init, I, tau, sigmas, phis, observed_components, unobserved_components,
+                       theta_conf, theta_guess_init, X_guesses, unobs_init_iters=500):
+    x_init = initialize_obs(observed_components, tau, I, x_init)
+    x_init, theta_init, sigmas, = initialize_unobs(x_init, unobserved_components, ode, I,
+                                    theta_conf, theta_guess_init, X_guesses, unobs_init_iters, sigmas)
+    phis, sigmas = fit_phisigma(I, x_init, phis, sigmas)
+    C_invs, ms, K_invs = build_matrices(I, phis)
+
+    # theta_init = jnp.array(theta_init, dtype=x_init.dtype)
+    sigmas = sigmas.reshape(-1, 1)
+    return x_init, theta_init, sigmas, phis, C_invs, ms, K_invs
+
+##########################################################
+########### Non-initialization-related Helpers ###########
+##########################################################
 
 def listify(val, length):
     '''
@@ -261,3 +286,6 @@ def listify(val, length):
 
 def jnp_pad(array, axis=-1):
     return jnp.expand_dims(array, axis=axis)
+
+def pairwise_sq_distances(x, y):
+    return jnp.sum((x[:, jnp.newaxis, :] - y[jnp.newaxis, :, :])**2, axis=-1)

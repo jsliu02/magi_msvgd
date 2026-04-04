@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 import optax
-from functools import partial
 
 import numpy as np
 from tqdm.notebook import trange
@@ -16,7 +15,7 @@ Additional helpers dependencies: jaxopt, scipy, sklearn
 '''
 class MAGISolver():
     def __init__(self, ode, data, theta_guess, dfdx=None, dfdtheta=None, sigmas=None,
-                 theta_conf=0, X_guesses=1, unobs_init_iters=500, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
+                 theta_conf=0, X_guess=1, mu=None, mu_dot=None, pos_X=False, pos_theta=False,
                  prior_temperature='default', bayesian_sigma=True, init_dtype='float32'):
         '''
         Initializing theta and unobserved components is done using acceleration library via autograd.
@@ -37,8 +36,7 @@ class MAGISolver():
         dfdtheta (function, (Xs, thetas, t) -> n x p x D) : gradient of ODE with respect to theta (autograd if not provided)
         sigmas (array or None) : observation noise standard deviation, if known; individual entries can be set to None
         theta_conf (float or array) : confidence in initial guess for theta, larger theta_conf will pull theta initialization toward guess
-        X_guesses (int) : number of times to run X initialization procedure, can give more stable results
-        unobs_init_iters (int) : number of Adam steps when solving for initialization of theta and unobserved components
+        X_guess (int) : number of times to run X initialization procedure, can give more stable results
         mu (array, n x D) : prior mean function evaluated at discretization index I
         mu_dot (array, n x D) : derivative of prior mean function with respect to time, evaluated at I
         pos_X (bool) : whether to restrict X to strictly positive values (PyTorch only)
@@ -104,8 +102,7 @@ class MAGISolver():
         # number of parameters in theta
         self.p = len(theta_guess)
 
-        self.X_guesses = X_guesses
-        self.unobs_init_iters = unobs_init_iters
+        self.X_guess = X_guess
 
         # boolean mask for observed data
         tau = jnp.isfinite(self.x_init)
@@ -122,9 +119,9 @@ class MAGISolver():
         # tau : D x n -> to be replicated to k x D x n x 1 later
         self.tau = tau.T
 
-        self.phis = jnp.zeros([self.D, 2], dtype=init_dtype, device=init_device)
+        self.phis = [None] * self.D
         if sigmas is None:
-            self.sigmas = jnp.zeros(self.D, dtype=init_dtype, device=init_device)
+            self.sigmas = jnp.zeros(self.D)
             self.unknown_sigmas = jnp.arange(self.D, dtype=init_dtype, device=init_device)
         else:
             self.sigmas = jnp.array(sigmas, dtype=init_dtype, device=init_device)
@@ -134,17 +131,22 @@ class MAGISolver():
         if not bayesian_sigma:
             self.unknown_sigmas = None
 
-        # run_initialization is fully JIT-compiled
-        initializations = helpers.run_initialization(self.ode, self.x_init, self.I, self.tau,
-                            self.sigmas, self.phis, self.observed_components, self.unobserved_components,
-                            self.theta_conf, self.theta_guess, self.X_guesses, self.unobs_init_iters)
-        self.x_init = initializations[0]
-        self.theta_init = initializations[1]
-        self.sigmas = initializations[2]
-        self.phis = initializations[3]
-        self.C_invs = initializations[4]
-        self.ms = initializations[5]
-        self.K_invs = initializations[6]
+        # interpolate data for observed components
+        helpers.initialize_obs(self)
+
+        # fit derivatives on unobserved components, fit theta
+        helpers.initialize_unobs(self)
+
+        # fit phi on all components, sigma on observed components
+        helpers.fit_phisigma(self, v=2.01)
+
+        # phis: D x 2
+        self.phis = jnp.array(self.phis, dtype=init_dtype, device=init_device)
+        # sigmas: D x 1 -> to be replicated to k x D x n x 1 later
+        self.sigmas = self.sigmas.reshape(-1, 1)
+
+        # C_invs, ms, K_invs : D x n x n -> to be replicated to k x D x n x n
+        helpers.build_matrices(self, v=2.01)
 
         # set GP mean priors
         # mu, mu_dot: n x D -> to be replicated to k x D x n x 1 later
