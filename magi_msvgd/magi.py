@@ -68,16 +68,14 @@ class MAGISolver():
         # dfdx: -> n x D x D
         # mapdfdx: -> k x n x D x D
         if dfdx is None:
-            mapdfdx = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=0), in_axes=(0, None, 0)), in_axes=(0, 0, None))
-            self.mapdfdx = lambda X, theta, t: jnp.permute_dims(mapdfdx(X, theta, t), [0, 1, 3, 2])
+            self.mapdfdx = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=0), in_axes=(0, None, 0)), in_axes=(0, 0, None))
         else:
             self.mapdfdx = jax.vmap(jax.vmap(dfdx, in_axes=(0, None, 0)), in_axes=(0, 0, None))
 
-        # dfdtheta: -> n x p x D
-        # mapdfdtheta: -> k x n x p x D
+        # dfdtheta: -> n x D x p
+        # mapdfdtheta: -> k x n x D x p
         if dfdtheta is None:
-            mapdfdtheta = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=1), in_axes=(0, None, 0)), in_axes=(0, 0, None))
-            self.mapdfdtheta = lambda X, theta, t: jnp.permute_dims(mapdfdtheta(X, theta, t), [0, 1, 3, 2])
+            self.mapdfdtheta = jax.vmap(jax.vmap(jax.jacobian(ode, argnums=1), in_axes=(0, None, 0)), in_axes=(0, 0, None))
         else:
             self.mapdfdtheta = jax.vmap(jax.vmap(dfdtheta, in_axes=(0, None, 0)), in_axes=(0, 0, None))
 
@@ -281,9 +279,9 @@ class MAGISolver():
         # f: k x n x D -> k x D x n x 1
         f = helpers.jnp_pad(jnp.permute_dims(self.mapode(Xs, thetas, self.Is), [0, 2, 1]))
         # df_dx: k x n x D x D -> k x D x D x n
-        df_dx = jnp.permute_dims(self.mapdfdx(Xs, thetas, self.Is), [0, 3, 2, 1])
-        # df_dtheta: k x n x p x D -> k x D x p x n
-        df_dtheta = jnp.permute_dims(self.mapdfdtheta(Xs, thetas, self.Is), [0, 3, 2, 1])
+        df_dx = jnp.permute_dims(self.mapdfdx(Xs, thetas, self.Is), [0, 2, 3, 1])
+        # df_dtheta: k x n x D x p -> k x D x p x n
+        df_dtheta = jnp.permute_dims(self.mapdfdtheta(Xs, thetas, self.Is), [0, 2, 3, 1])
 
         # Xs: k x D x n x 1
         Xs = helpers.jnp_pad(jnp.permute_dims(Xs, [0, 2, 1]))
