@@ -136,41 +136,26 @@ class MAGI(MSVGD):
             '''
             Full MAGI log-density. (n*d + p + n_unknown_sigmas:,) -> scalar
             '''
-            # unpack particle
             theta = particle[:self.p] # (p,)
             X = particle[self.p:self.p+self.n*self.D].reshape(self.n, self.D) # (n, d)
             sigmas = self.sigmas.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
 
-            ode_eval = self.ode(X, theta, self.I.flatten())                         # (n, D)
-        
-            log_p = 0.0
-            for d in range(self.D):
-                x_d       = X[:, d]                                                 # (n,)
-                mu_d      = self.mu[:, d]                                           # (n,)
-                mu_dot_d  = self.mu_dot[:, d]                                       # (n,)
-                tau_d     = self.tau[:, d]                                          # (n,) bool
-                y_d       = self.x_init[:, d]                                       # (n,)
-                sigma_d   = sigmas[d]                                               # scalar
-                N_d       = self.Ns[d]                                              # scalar
-        
-                diff_d    = x_d - mu_d                                              # (n,)
-                resid_d   = jnp.where(tau_d, x_d - y_d, 0.0)                       # (n,)
-                ode_resid_d = ode_eval[:, d] - mu_dot_d - self.ms[d] @ diff_d      # (n,)
-        
-                gp_term_d   = diff_d    @ self.C_invs[d] @ diff_d                   # scalar
-                ode_term_d  = ode_resid_d @ self.K_invs[d] @ ode_resid_d           # scalar
-                obs_term_d  = jnp.sum(resid_d**2) / sigma_d**2                     # scalar
-                log_norm_d  = N_d * jnp.log(2 * jnp.pi * sigma_d**2)              # scalar
-        
-                log_p += (1/self.beta_inv) * gp_term_d \
-                       + log_norm_d \
-                       + obs_term_d \
-                       + (1/self.beta_inv) * ode_term_d
-        
-            return -0.5 * log_p
+            diff_X    = X - self.mu # (n, D)
+            resid_obs = jnp.where(self.tau, X - self.x_init, 0.0) # (n, D)
+            ode_resid = (self.ode(X, theta, self.I)
+                         - self.mu_dot
+                         - jnp.einsum('dnm,md->nd', self.ms, diff_X)) # (n, D)
 
+            Cinv_x    = jnp.einsum('dnm,md->nd', self.C_invs, diff_X) # (n, D)
+            Kinv_r    = jnp.einsum('dnm,md->nd', self.K_invs, ode_resid) # (n, D)
+
+            gp_term   = jnp.sum(diff_X   * Cinv_x) # scalar
+            log_norm  = jnp.sum(self.Ns * jnp.log(2 * jnp.pi * sigmas**2)) # scalar
+            obs_term  = jnp.sum(resid_obs**2 / sigmas**2) # scalar
+            ode_term  = jnp.sum(ode_resid * Kinv_r) # scalar
+
+            return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
         super().__init__(magi_logdensity)
-
 
     def device_put(self, device=jax.devices('gpu')[0]):
             '''
