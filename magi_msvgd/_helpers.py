@@ -23,7 +23,7 @@ def initialize_obs(observed_components, tau, I, x_init):
     def loop(i, x_init):
         # filter for dimension d
         d = observed_components[i]
-        tau_d = tau[d]
+        tau_d = tau[:,d]
         x_d = x_init[:, d]
 
         # now we have to do some tricks to make linear interpolation JIT compatible
@@ -269,27 +269,4 @@ def run_initialization(ode, x_init, I, tau, sigmas, phis, observed_components, u
                                     theta_conf, theta_guess_init, X_guesses, unobs_init_iters, sigmas)
     phis, sigmas = fit_phisigma(I, x_init, phis, sigmas)
     C_invs, ms, K_invs = build_matrices(I, phis)
-
-    # theta_init = jnp.array(theta_init, dtype=x_init.dtype)
-    sigmas = sigmas.reshape(-1, 1)
     return x_init, theta_init, sigmas, phis, C_invs, ms, K_invs
-
-##########################################################
-########### Non-initialization-related Helpers ###########
-##########################################################
-
-def listify(val, length):
-    '''
-    Prepare a numerical/iterable argument for mitosis splits.
-    '''
-    if isinstance(val, Iterable) and type(val) is not dict:
-        if len(val) == length: return val
-        else: raise ValueError(f"Incorrect gradient descent hyperparameter argument length, got {len(val)}, expecting {length}.")
-    else:
-        return [val] * length
-
-def jnp_pad(array, axis=-1):
-    return jnp.expand_dims(array, axis=axis)
-
-def pairwise_sq_distances(x, y):
-    return jnp.sum((x[:, jnp.newaxis, :] - y[jnp.newaxis, :, :])**2, axis=-1)
