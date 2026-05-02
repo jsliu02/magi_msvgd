@@ -35,7 +35,7 @@ def initialize_obs(solver):
         # linear interpolation of observations
         interpolator = sp.interpolate.interp1d(I_d, y_d, fill_value='extrapolate')
         x_init_d = interpolator(solver.I.flatten())
-        solver.x_init.at[:,d].set(x_init_d)
+        solver.x_init[:,d] = x_init_d
 
 def initialize_unobs(solver):
     '''

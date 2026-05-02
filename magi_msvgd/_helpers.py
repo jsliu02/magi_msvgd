@@ -5,7 +5,6 @@ from jax.scipy import optimize as jsp_optimize # note: may eventually change thi
 import optax
 from _matern_jax import matern_2p5, kvp_2p5
 from functools import partial
-from jax.tree_util import Partial
 from collections.abc import Iterable
 '''
 Dependencies: jax, optax
@@ -20,6 +19,7 @@ def initialize_obs(observed_components, tau, I, x_init):
     Fill X for observed data via linear interpolation.
     '''
     # iterate over only observed components
+    @jax.jit
     def loop(i, x_init):
         # filter for dimension d
         d = observed_components[i]
@@ -89,6 +89,7 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
     params = (x_guess_init, theta_guess_init)
     optimizer = optax.adam(learning_rate=0.01)
 
+    @jax.jit
     def loop_inner(i, inner_params):
         x_guess, theta_guess, opt_state = inner_params
         params = (x_guess, theta_guess)
@@ -99,6 +100,7 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
         params = optax.apply_updates(params, updates)
         return *params, opt_state
 
+    @jax.jit
     def loop_outer(i, params):
         x_guess, theta_guess = params
         params = (x_guess, theta_guess_init)
@@ -124,6 +126,7 @@ def fit_phisigma(I, x_init, phis, sigmas):
     I_max = I.max()
     Id_n = jnp.identity(I.shape[0], dtype=I.dtype)
 
+    @jax.jit
     def neglogprob(phi, sigma, mu_phi2, sig_phi2, y_d):
         '''
         Target negative log density for fitting phi1, phi2, and sigma for a single component.
@@ -135,6 +138,7 @@ def fit_phisigma(I, x_init, phis, sigmas):
         t3 = y_d @ jnp.linalg.solve(cov, y_d)
         return  0.5 * (t1 + t2 + t3)
 
+    @jax.jit
     def target(log_phi, log_sigma, mu_phi2, sig_phi2, y_d):
         '''
         Note that there is currently no JIT-compatible way to do constrained optimization,
@@ -143,6 +147,8 @@ def fit_phisigma(I, x_init, phis, sigmas):
         return neglogprob(jnp.exp(log_phi), jnp.exp(log_sigma), mu_phi2, sig_phi2, y_d)
 
     targets = (phis, sigmas)
+
+    @jax.jit
     def loop(d, targets):
         phis, sigmas = targets
 
@@ -184,6 +190,7 @@ def build_matrices(I, phis):
     '''
     Construct GP matrices and inverses.
     '''
+    @jax.jit
     def build_matrices_d(I, phi1, phi2):
         '''
         Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
@@ -237,10 +244,11 @@ def build_matrices(I, phis):
         Kappa_pp = jnp.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) ), inplace=False) # behavior as |s-t| \to 0^+
 
         # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
-        C_d_inv = jnp.linalg.solve(Kappa, jnp.eye(Kappa.shape[0], dtype=Kappa.dtype))
+        # note: sparse matrices can be worse performance on GPU, or negligble imporvement
+        C_d_inv = jnp.linalg.pinv(Kappa)
         m_d = p_Kappa @ C_d_inv
         K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
-        K_d_inv = jnp.linalg.solve(K_d, jnp.eye(K_d.shape[0], dtype=K_d.dtype))
+        K_d_inv = jnp.linalg.pinv(K_d)
 
         # 6. return our three matrices
         return C_d_inv, m_d, K_d_inv
@@ -261,7 +269,6 @@ def build_matrices(I, phis):
     full_matrices = jax.lax.fori_loop(0, phis.shape[0], loop, matrices)
     return full_matrices
 
-@partial(jax.jit, static_argnames=['ode'])
 def run_initialization(ode, x_init, I, tau, sigmas, phis, observed_components, unobserved_components,
                        theta_conf, theta_guess_init, X_guesses, unobs_init_iters=500):
     x_init = initialize_obs(observed_components, tau, I, x_init)

@@ -1,5 +1,6 @@
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
+from functools import partial
 
 '''
 Bessel functions. Note that the naming scheme kv_xp5 indicates parameter x.5.
@@ -24,6 +25,7 @@ def kv_4p5(z):
     return _kv_prefactor(z) * (1 + 10/z + 45/z**2 + 105/z**3 + 105/z**4)
 
 
+@partial(jax.jit, static_argnames=["n"])
 def kvp_2p5(z, n):
     """
     Analogue of scipy.special.kvp for v=2.5 degrees of freedom. Only need n=0,1,2
@@ -45,6 +47,6 @@ def matern_2p5(x, y, phi1, phi2):
     sq_dists = jnp.sum(
         (x[:, jnp.newaxis, :] - y[jnp.newaxis, :, :])**2, axis=-1
     )
-    r = jnp.sqrt(jnp.clip(sq_dists, min=0))
+    r = jnp.sqrt(jnp.clip(sq_dists, min=1e-10))
     s = jnp.sqrt(5) * r / phi2
     return phi1 * (1 + s + s**2 / 3) * jnp.exp(-s)

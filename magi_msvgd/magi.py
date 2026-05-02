@@ -14,7 +14,7 @@ class MAGI(MSVGD):
     def __init__(self, ode, data, theta_guess, sigmas=None,
                  theta_conf=0, X_guesses=1, unobs_init_iters=500,
                  mu=None, mu_dot=None, prior_temperature='default',
-                 init_device=jax.devices('cpu')[0], init_dtype='float32'):
+                 init_dtype='float64', init_device=jax.devices('cpu')[0]):
         '''
         Initializing theta and unobserved components is done using acceleration library via autograd.
 
@@ -38,14 +38,18 @@ class MAGI(MSVGD):
         mu_dot (array, n x D) : derivative of prior mean function with respect to time, evaluated at I
 
         temper_prior (float) : prior tempering factor, default: beta = Dn/N
-        init_dtype (str or dtype) : data type to be used for initialization, default: float32
+        init_dtype (str or dtype) : data type to be used for initialization, default: float64 (unstable at lower precision)
+        init_device : jax.device used for initialization. Use .put() to move later for mSVGD
         '''
         # validate dtype
         # self.init_dtype = init_dtype
         # self.init_device = init_device
+
         # NOTE: we do initialization on the CPU since
         ## initializations are relatively non-parallel and seem to be faster on CPU
-        ## TODO: test on beefier hardware (if GPU outperforms, add user-facing toggle switch)
+        ## and because fp64 is much more stable for constructing precomputed matrices
+        if jnp.dtype(init_dtype) == jnp.float64:
+            jax.config.update("jax_enable_x64", True)
 
         # save ode function and its gradients, as well as map versions that apply over dim 0
         # use mapped version to apply to the entire batch of particles
@@ -157,12 +161,18 @@ class MAGI(MSVGD):
             return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
         super().__init__(magi_logdensity)
 
-    def device_put(self, device=jax.devices('gpu')[0]):
+    def put(self, dtype=jnp.float32, device=jax.devices('gpu')[0]):
             '''
             Move everything to new device.
             '''
+            if jnp.dtype(dtype) == jnp.float64:
+                jax.config.update("jax_enable_x64", True)
+            else:
+                jax.config.update("jax_enable_x64", False)
             for attr, val in self.__dict__.items():
                 if isinstance(val, jax.Array):
+                    if jnp.issubdtype(val.dtype, jnp.floating):
+                        val = jnp.astype(val, dtype)
                     setattr(self, attr, jax.device_put(val, device))
     # def solve(
     #     self,
