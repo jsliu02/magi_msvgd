@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import optax
 from msvgd import MSVGD
 from functools import partial
 
@@ -14,7 +15,7 @@ class MAGI(MSVGD):
     def __init__(self, ode, data, theta_guess, sigmas=None,
                  theta_conf=0, X_guesses=1, unobs_init_iters=500,
                  mu=None, mu_dot=None, prior_temperature='default',
-                 init_dtype='float64', init_device=jax.devices('cpu')[0]):
+                 init_dtype='float64', init_device=None):
         '''
         Initializing theta and unobserved components is done using acceleration library via autograd.
 
@@ -40,21 +41,23 @@ class MAGI(MSVGD):
         temper_prior (float) : prior tempering factor, default: beta = Dn/N
         init_dtype (str or dtype) : data type to be used for initialization, default: float64 (unstable at lower precision)
         init_device : jax.device used for initialization. Use .put() to move later for mSVGD
+            (default: GPU if available, else CPU -- resolved lazily so this class can still be
+            imported and used on machines with no GPU)
         '''
         # validate dtype
         # self.init_dtype = init_dtype
         # self.init_device = init_device
 
-        # NOTE: we do initialization on the CPU since
-        ## initializations are relatively non-parallel and seem to be faster on CPU
-        ## and because fp64 is much more stable for constructing precomputed matrices
+        if init_device is None:
+            init_device = jax.devices()[0]
+
+        # NOTE: we may want to do initialization on the CPU because fp64
+        # is much more stable for constructing precomputed matrices,
+        # which is sometimes faster on CPU
         if jnp.dtype(init_dtype) == jnp.float64:
             jax.config.update("jax_enable_x64", True)
 
-        # save ode function and its gradients, as well as map versions that apply over dim 0
-        # use mapped version to apply to the entire batch of particles
-
-        # ode: ((n, D), (p,), (n,)) -> (D,)
+        # ode: ((1, D), (p,), (1,)) -> (D,)
         self.ode = jax.vmap(ode, in_axes=(0, None, 0))
 
         # I: n x 1
@@ -86,13 +89,18 @@ class MAGI(MSVGD):
         tau = jnp.isfinite(self.x_init)
 
         # number of data observations, shape = (D,)
-        self.Ns = tau.sum(axis=0)
+        # explicit int32: these are small counts/indices that never need 64-bit range, and
+        # put() only downcasts floating attributes -- leaving these at the platform default
+        # (int64, if constructed while jax_enable_x64 was on for float64 init) would trigger
+        # "Explicitly requested dtype int64 ... truncated to int32" warnings the first time
+        # they're used in arithmetic after put()/solve() disables x64 for float32 sampling.
+        self.Ns = tau.sum(axis=0, dtype=jnp.int32)
         self.N = self.Ns.sum().item()
 
         # dimension indices of observed components
         # consider > 2 observations to be observed, else can't fit matern kernel
-        self.observed_components = jnp.where(self.Ns > 2)[0]
-        self.unobserved_components = jnp.where(self.Ns <= 2)[0]
+        self.observed_components = jnp.where(self.Ns > 2)[0].astype(jnp.int32)
+        self.unobserved_components = jnp.where(self.Ns <= 2)[0].astype(jnp.int32)
 
         # tau : n x D
         self.tau = tau
@@ -103,9 +111,11 @@ class MAGI(MSVGD):
             self.unknown_sigmas = jnp.full(self.D, True, device=init_device)
         else:
             self.sigmas = jnp.array(sigmas, dtype=init_dtype, device=init_device)
-            self.unknown_sigmas = jnp.where((self.sigmas >= 0) & (self.Ns > 2), False, True)
-            if len(self.unknown_sigmas) == 0:
-                self.unknown_sigmas = None
+            # unknown (needs Bayesian fitting) iff sigma wasn't given AND the component
+            # is observed enough to fit it -- NOT De Morgan's negation of "known", which
+            # would wrongly mark under-observed (Ns<=2) components as unknown too and
+            # give them a phantom, gradient-free sigma particle dimension
+            self.unknown_sigmas = jnp.logical_and(~(self.sigmas >= 0), self.Ns > 2)
 
         # run_initialization is fully JIT-compiled
         initializations = run_initialization(self.ode, self.x_init, self.I, self.tau,
@@ -120,6 +130,12 @@ class MAGI(MSVGD):
         self.K_invs = initializations[6] # (d, n, n)
 
         self.particles_init = jnp.concatenate([self.theta_init, self.x_init.flatten(), self.sigmas[self.unknown_sigmas]])
+        self.particles = None
+        # tracks whether the user has explicitly chosen a dtype/device via put() -- if not,
+        # solve() will default to float32 for speed (fp64 is ~3x+ slower for the einsum-heavy
+        # mSVGD gradient, and much worse than that on non-datacenter GPUs), without silently
+        # overriding an explicit choice (including an explicit choice to keep float64).
+        self._put_called = False
 
         # set GP mean priors
         # mu, mu_dot: n x D
@@ -140,31 +156,43 @@ class MAGI(MSVGD):
             '''
             Full MAGI log-density. (n*d + p + n_unknown_sigmas:,) -> scalar
             '''
-            theta = particle[:self.p] # (p,)
-            X = particle[self.p:self.p+self.n*self.D].reshape(self.n, self.D) # (n, d)
-            sigmas = self.sigmas.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
+            with jax.default_matmul_precision("highest"):
+                theta = particle[:self.p] # (p,)
+                X = particle[self.p:self.p+self.n*self.D].reshape(self.n, self.D) # (n, d)
+                sigmas = self.sigmas.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
+                # fully-unobserved (Ns=0) dimensions carry a placeholder sigma (0.0) that's
+                # never fit; their log_norm/obs_term contribution is already forced to exactly
+                # zero below (by Ns=0 and tau=False respectively), so any finite value here is
+                # mathematically inert -- but evaluating log(0.0**2) or dividing by 0.0**2
+                # would still produce nan (0*log(0)=nan, 0/0=nan). Substitute a safe nonzero
+                # value only for computing those two terms.
+                safe_sigmas = jnp.where(self.Ns > 0, sigmas, 1.0) # (d,)
 
-            diff_X    = X - self.mu # (n, D)
-            resid_obs = jnp.where(self.tau, X - self.x_init, 0.0) # (n, D)
-            ode_resid = (self.ode(X, theta, self.I)
-                         - self.mu_dot
-                         - jnp.einsum('dnm,md->nd', self.ms, diff_X)) # (n, D)
-
-            Cinv_x    = jnp.einsum('dnm,md->nd', self.C_invs, diff_X) # (n, D)
-            Kinv_r    = jnp.einsum('dnm,md->nd', self.K_invs, ode_resid) # (n, D)
-
-            gp_term   = jnp.sum(diff_X   * Cinv_x) # scalar
-            log_norm  = jnp.sum(self.Ns * jnp.log(2 * jnp.pi * sigmas**2)) # scalar
-            obs_term  = jnp.sum(resid_obs**2 / sigmas**2) # scalar
-            ode_term  = jnp.sum(ode_resid * Kinv_r) # scalar
+                diff_X    = X - self.mu # (n, D)
+                resid_obs = jnp.where(self.tau, X - self.x_init, 0.0) # (n, D)
+                ode_resid = (self.ode(X, theta, self.I)
+                             - self.mu_dot
+                             - jnp.einsum('dnm,md->nd', self.ms, diff_X)) # (n, D)
+    
+                Cinv_x    = jnp.einsum('dnm,md->nd', self.C_invs, diff_X) # (n, D)
+                Kinv_r    = jnp.einsum('dnm,md->nd', self.K_invs, ode_resid) # (n, D)
+    
+                gp_term   = jnp.sum(diff_X * Cinv_x) # scalar
+                log_norm  = jnp.sum(self.Ns * jnp.log(2 * jnp.pi * safe_sigmas**2)) # scalar
+                obs_term  = jnp.sum(resid_obs**2 / safe_sigmas**2) # scalar
+                ode_term  = jnp.sum(ode_resid * Kinv_r) # scalar
 
             return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
         super().__init__(magi_logdensity)
+        
 
-    def put(self, dtype=jnp.float32, device=jax.devices('gpu')[0]):
+    def put(self, dtype=jnp.float32, device=None):
             '''
             Move everything to new device.
+            device : default GPU if available, else CPU (resolved lazily).
             '''
+            if device is None:
+                device = jax.devices()[0]
             if jnp.dtype(dtype) == jnp.float64:
                 jax.config.update("jax_enable_x64", True)
             else:
@@ -174,38 +202,81 @@ class MAGI(MSVGD):
                     if jnp.issubdtype(val.dtype, jnp.floating):
                         val = jnp.astype(val, dtype)
                     setattr(self, attr, jax.device_put(val, device))
-    # def solve(
-    #     self,
-    #     k=200,
-    #     sigma_0=0.2,
-    #     mitosis_splits=0,
-    #     random_seed=8,
-    #     optimizer=None,
-    #     optimizer_kwargs={"learning_rate": 1e-2},
-    #     max_iter=10_000,
-    #     atol=1e-2,
-    #     rtol=1e-8,
-    #     bandwidth=-1,
-    #     monitor_convergence=0,
-    # ):
-    #     '''
-    #     Solve mSVGD optimization for MAGI.
+            self._put_called = True
+    def solve(
+        self,
+        k=200,
+        sigma_init=0.2,
+        mitosis_splits=0,
+        random_seed=8,
+        optimizer=optax.adam,
+        optimizer_kwargs={"learning_rate": 0.1},
+        batch_size=None,
+        is_MAP=False,
+        max_iter=10_000,
+        atol=1e-2,
+        rtol=1e-8,
+        bandwidth=-1,
+        grad_clip=None,
+        monitor_convergence=0,
+    ):
+        '''
+        Solve mSVGD optimization for MAGI.
 
-    #     Arguments
-    #     ----------
-    #     k                   : int, number of initial particles
-    #     sigma_init          : float, standard deviation for sampling initial state
-    #     mitosis_splits      : number of particle-doubling steps
-    #     key                 : a jax.random key to sample mitosis jitters
+        Arguments
+        ----------
+        k                   : int, number of initial particles
+        sigma_init          : float, standard deviation for sampling initial state
+        Note: If self.particles is not None, solve() will use previous results by default. Set to None to reset.
+        
+        mitosis_splits      : number of particle-doubling steps
+        random_seed         : a jax.random key to sample mitosis jitters
 
-    #     Note: The following arguments may each be passed as a single value to be used globally
-    #         or as a list of length `mitosis_splits+1`, containing (different) values for each mitosis phase.
-    #     optimizer           : an optax optimizer constructor, or list thereof
-    #     optimizer_kwargs    : dict of kwargs passed to the optimizer, or list thereof
-    #     max_iter            : int or list of ints (one per phase)
-    #     atol, rtol          : convergence tolerances,  all(grad <= atol + rtol * particles)
-    #     bandwidth           : RBF bandwidths (-1 = median heuristic)
+        Note: The following arguments may each be passed as a single value to be used globally
+            or as a list of length `mitosis_splits+1`, containing (possibly different) values for each mitosis phase.
+        optimizer           : an optax optimizer constructor, or list thereof, configured for descent
+        optimizer_kwargs    : dict of kwargs passed to the optimizer, or list thereof
+            Warning : It is necessary in some case for optimizer kwargs to have the same dtype as x0,
+                e.g. {"learning_rate" : jnp.array(0.1, dtype=x0.dtype)}
+        batch_size          : int or list of ints (one per phase) for batched optimization, None for full dataset
+        is_MAP              : bool or list of bools for whether to mode-find using on the gradient of only the logdensity
+        max_iter            : int or list of ints (one per phase)
+        atol, rtol          : convergence tolerances,  all(grad <= atol + rtol * particles)
+        bandwidth           : RBF bandwidths (-1 = median heuristic)
+        grad_clip           : float or list of floats (one per phase), max global norm for the particle
+            gradient before the optimizer step, None to disable. Useful to guard against exploding
+            updates in batched/stochastic optimization.
 
-    #     monitor_convergence : int — print max grad every N iterations
-    #         (0 = print status after each mitosis split, < 0 = fully silence)
-    #     '''
+        monitor_convergence : int — print max grad every N iterations
+            (0 = print status after each mitosis split, < 0 = fully silence)
+
+        Note: if put() has not already been called, solve() defaults to float32 (call
+        put(dtype=jnp.float64, ...) beforehand if you want float64 sampling instead).
+        '''
+        if not self._put_called:
+            self.put(dtype=jnp.float32)
+
+        init_key, msvgd_key = jr.split(jr.key(random_seed))
+        if self.particles is None:
+            self.particles = self.particles_init + jr.normal(init_key, shape=(k, self.particles_init.shape[0])) * sigma_init
+
+        particles = super().solve(x0=self.particles,
+            mitosis_splits=mitosis_splits,
+            random_seed=msvgd_key,
+            data=None,
+            optimizer=optimizer,
+            optimizer_kwargs=optimizer_kwargs,
+            batch_size=None,
+            is_MAP=is_MAP,
+            max_iter=max_iter,
+            atol=atol,
+            rtol=rtol,
+            bandwidth=bandwidth,
+            grad_clip=grad_clip,
+            monitor_convergence=monitor_convergence)
+
+        theta = particles[:,:self.p]
+        X = particles[:,self.p:self.p+self.n*self.D].reshape(particles.shape[0], self.n, self.D)
+        sigmas = particles[:,self.p+self.n*self.D:]
+        
+        return theta, X, sigmas

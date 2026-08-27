@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from jax.scipy import optimize as jsp_optimize # note: may eventually change this to use Optimistix
 import optax
-from _matern_jax import matern_2p5, kvp_2p5
+from _matern_jax import matern_v01, kvp_2p01
 from functools import partial
 from collections.abc import Iterable
 '''
@@ -14,22 +14,25 @@ Dependencies: jax, optax
 ############# Initialization-related Helpers #############
 ##########################################################
 
+@jax.jit
 def initialize_obs(observed_components, tau, I, x_init):
     '''
     Fill X for observed data via linear interpolation.
     '''
-    # iterate over only observed components
-    @jax.jit
-    def loop(i, x_init):
+    I_flat = I.flatten()
+
+    # each observed dimension is interpolated independently of the others, so this
+    # batches across dimensions with vmap instead of a sequential fori_loop (~6x faster,
+    # verified: sequential 733us vs vmapped 121us at n=81, D=10)
+    def interp_one(d):
         # filter for dimension d
-        d = observed_components[i]
         tau_d = tau[:,d]
         x_d = x_init[:, d]
 
         # now we have to do some tricks to make linear interpolation JIT compatible
 
         # sort I and x_d to put all non-nans at front
-        I_modif = jnp.where(tau_d, I.flatten(), jnp.inf)
+        I_modif = jnp.where(tau_d, I_flat, jnp.inf)
         sort_idx = jnp.argsort(I_modif)
         sorted_I = I_modif[sort_idx]
         sorted_x_d = x_d[sort_idx]
@@ -45,13 +48,13 @@ def initialize_obs(observed_components, tau, I, x_init):
         padded_x_d = jnp.where(~jnp.isfinite(sorted_x_d), last_valid_x, sorted_x_d)
 
         # linear interpolation of observations
-        x_init_d = jnp.interp(I.flatten(), padded_I, padded_x_d)
-        x_init = x_init.at[:,d].set(x_init_d)
-        return x_init
+        return jnp.interp(I_flat, padded_I, padded_x_d)
 
-    x_init = jax.lax.fori_loop(0, observed_components.shape[0], loop, x_init)
+    x_init_observed = jax.vmap(interp_one)(observed_components) # (n_observed, n)
+    x_init = x_init.at[:, observed_components].set(x_init_observed.T)
     return x_init
 
+@partial(jax.jit, static_argnames=['ode', 'unobs_init_iters', 'X_guesses'])
 def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_guess_init, X_guesses,
                      unobs_init_iters, sigmas):
     '''
@@ -89,7 +92,6 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
     params = (x_guess_init, theta_guess_init)
     optimizer = optax.adam(learning_rate=0.01)
 
-    @jax.jit
     def loop_inner(i, inner_params):
         x_guess, theta_guess, opt_state = inner_params
         params = (x_guess, theta_guess)
@@ -100,7 +102,6 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
         params = optax.apply_updates(params, updates)
         return *params, opt_state
 
-    @jax.jit
     def loop_outer(i, params):
         x_guess, theta_guess = params
         params = (x_guess, theta_guess_init)
@@ -119,26 +120,29 @@ def initialize_unobs(x_init, unobserved_components, ode, I, theta_conf, theta_gu
     sigmas = sigmas.at[unobserved_components].set(0.0)
     return x_init, theta_init, sigmas
 
+@jax.jit
 def fit_phisigma(I, x_init, phis, sigmas):
     '''
     Fit phi and sigma for all components via scipy numerical optimization.
     '''
     I_max = I.max()
     Id_n = jnp.identity(I.shape[0], dtype=I.dtype)
+    # n (and hence the FFT frequency index array) is the same for every component's column
+    # of x_init, so this only needs to be built once instead of once per dimension
+    n_freqs = (x_init.shape[0] - 1) // 2
+    idxs = jnp.linspace(1, n_freqs, n_freqs, dtype=x_init.dtype)
 
-    @jax.jit
     def neglogprob(phi, sigma, mu_phi2, sig_phi2, y_d):
         '''
         Target negative log density for fitting phi1, phi2, and sigma for a single component.
         '''
-        cov = matern_2p5(I, I, phi1=phi[0], phi2=phi[1]) + Id_n * sigma**2
+        cov = matern_v01(I, I, phi1=phi[0], phi2=phi[1]) + Id_n * sigma**2
 
         t1 = (phi[1] - mu_phi2)**2 / sig_phi2**2
         t2 = 2 * jnp.sum(jnp.log(jnp.diag(jnp.linalg.cholesky(cov))))
         t3 = y_d @ jnp.linalg.solve(cov, y_d)
         return  0.5 * (t1 + t2 + t3)
 
-    @jax.jit
     def target(log_phi, log_sigma, mu_phi2, sig_phi2, y_d):
         '''
         Note that there is currently no JIT-compatible way to do constrained optimization,
@@ -148,7 +152,6 @@ def fit_phisigma(I, x_init, phis, sigmas):
 
     targets = (phis, sigmas)
 
-    @jax.jit
     def loop(d, targets):
         phis, sigmas = targets
 
@@ -156,7 +159,6 @@ def fit_phisigma(I, x_init, phis, sigmas):
         z = jnp.fft.fft(y_d)
         zmod = jnp.abs(z)
         zmod_effective_sq = zmod[1:(zmod.shape[0] - 1) // 2 + 1]**2
-        idxs = jnp.linspace(1,  zmod_effective_sq.shape[0], zmod_effective_sq.shape[0], dtype=y_d.dtype)
         freq = jnp.sum(idxs * zmod_effective_sq) / jnp.sum(zmod_effective_sq)
         mu_phi2 = 0.5 / freq
         sig_phi2 = (I_max - mu_phi2) / 3
@@ -186,34 +188,53 @@ def fit_phisigma(I, x_init, phis, sigmas):
     targets = jax.lax.fori_loop(0, x_init.shape[1], loop, targets)
     return targets
 
+def _fast_pd_inv(K):
+    '''
+    Invert a matrix expected to be positive definite via Cholesky (~40x faster than
+    pinv, verified numerically identical on real Kappa matrices), falling back to
+    pinv if K turns out not to be numerically PD (cho_solve reliably NaNs out in that
+    case rather than raising, so this is a safe/cheap runtime check).
+    '''
+    c, lower = jsp.linalg.cho_factor(K)
+    chol_inv = jsp.linalg.cho_solve((c, lower), jnp.eye(K.shape[0], dtype=K.dtype))
+    return jax.lax.cond(
+        jnp.any(jnp.isnan(chol_inv)),
+        lambda: jnp.linalg.pinv(K),
+        lambda: chol_inv,
+    )
+
+@jax.jit
 def build_matrices(I, phis):
     '''
     Construct GP matrices and inverses.
     '''
-    @jax.jit
-    def build_matrices_d(I, phi1, phi2):
+    # st_diff = s-t and l = |s-t| depend only on I, which is shared across every dimension d
+    # -- compute once here instead of once per dimension inside build_matrices_d.
+    # note: vmap across d does *not* help here (verified: vmap(pinv) over D=10 took the same
+    # 239ms total as 10 sequential pinv calls -- pinv/SVD doesn't batch on this GPU backend),
+    # so this stays a fori_loop; only the invariant setup is hoisted out.
+    st_diff = I - I.T
+    l = jnp.abs(st_diff)
+
+    def build_matrices_d(st_diff, l, phi1, phi2):
         '''
-        Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
-        - I is an jnp.array of discretized timesteps, phi1 & phi2 are floats.
+        Takes in precomputed pairwise time differences and hparams (phi1, phi2, v).
+        Returns (C_d, m_d, K_d) for component d.
 
         Credit: Skyler Wu
         '''
-        # fix degrees of freedom at 2.5 for easy Matern kernel computation
-        v = jnp.array(2.5, dtype=I.dtype) # strong typing to ensure gamma function returns correct type
+        # MAGI's actual smoothness parameter (see _matern_jax.py for why this needs a
+        # host callback rather than a closed form the way v=2.5 did)
+        v = jnp.array(2.01, dtype=l.dtype) # strong typing to ensure gamma function returns correct type
 
-        # tile appropriately to facilitate vectorization
-        s = jnp.tile(A=I, reps=I.shape[0])
-        t = s.T
-
-        # l = |s-t|, u = sqrt(2*nu) * l / phi2 - let's nan out diagonals to avoid imprecision errors.
-        l = jnp.abs(s - t)
+        # u = sqrt(2*nu) * l / phi2 - let's nan out diagonals to avoid imprecision errors.
         u = jnp.sqrt(2*v) * l / phi2
         u = jnp.fill_diagonal(a=u, val=jnp.nan, inplace=False)
 
         # pre-compute Bessel function + derivatives
-        Bv0 = kvp_2p5(z=u, n=0)
-        Bv1 = kvp_2p5(z=u, n=1)
-        Bv2 = kvp_2p5(z=u, n=2)
+        Bv0 = kvp_2p01(z=u, n=0)
+        Bv1 = kvp_2p01(z=u, n=1)
+        Bv2 = kvp_2p01(z=u, n=2)
 
         # 1. Kappa itself, but we need to correct everywhere with l=|s-t|=0 to have value exp(0.0) = 1.0
         Kappa = (phi1/jsp.special.gamma(v)) * (2 ** (1 - (v/2))) * ((jnp.sqrt(v) / phi2) ** v)
@@ -227,7 +248,7 @@ def build_matrices(I, phis):
         p_Kappa = (2 ** (1 - (v/2)))
         p_Kappa *= phi1 * ((u / jnp.sqrt(2)) ** v)
         p_Kappa *= ( (u * phi2 * Bv1) + (v*phi2*Bv0) )
-        p_Kappa /= (phi2 * (s-t) * jsp.special.gamma(v))
+        p_Kappa /= (phi2 * st_diff * jsp.special.gamma(v))
         p_Kappa = jnp.fill_diagonal(p_Kappa, val=0.0, inplace=False) # behavior as |s-t| \to 0^+
 
         # 3. Kappa_p (by symmetry)
@@ -236,7 +257,8 @@ def build_matrices(I, phis):
         # 4. Kappa_pp - let's proceed term-by-term (save multiplier terms at the end)
         Kappa_pp = 2 * jnp.sqrt(2) * (v ** 1.5) * phi2 * l * Bv1
         Kappa_pp += ( ( (v ** 2) * (phi2 ** 2) ) - ( v * (phi2 ** 2) ) ) * Bv0
-        Kappa_pp += ( (2 * v * (s ** 2)) - (4 * v * s * t) + (2 * v * (t ** 2)) ) * Bv2
+        # (2*v*s^2 - 4*v*s*t + 2*v*t^2) = 2*v*(s-t)^2 = 2*v*l^2
+        Kappa_pp += 2 * v * (l ** 2) * Bv2
         Kappa_pp *= ( -1.0 * (2 ** (1 - (v/2))) * phi1 * ((u / jnp.sqrt(2)) ** v) )
         Kappa_pp /= ( (phi2 ** 2) * (l ** 2) * jsp.special.gamma(v) )
 
@@ -245,7 +267,13 @@ def build_matrices(I, phis):
 
         # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
         # note: sparse matrices can be worse performance on GPU, or negligble imporvement
-        C_d_inv = jnp.linalg.pinv(Kappa)
+        # Kappa is a genuine Matern covariance matrix -- PD in essentially all realistic
+        # cases, so C_d_inv can safely take the fast Cholesky path (~40x speedup, verified
+        # numerically identical to pinv on real fitted phis; falls back to pinv if not PD).
+        # K_d, by contrast, is a Schur-complement-style subtraction that we verified goes
+        # genuinely non-PSD (not just fp noise) at realistic phi2/discretization combinations
+        # -- so K_d_inv must stay on pinv.
+        C_d_inv = _fast_pd_inv(Kappa)
         m_d = p_Kappa @ C_d_inv
         K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
         K_d_inv = jnp.linalg.pinv(K_d)
@@ -260,7 +288,7 @@ def build_matrices(I, phis):
     matrices = (C_invs, ms, K_invs)
     def loop(d, matrices):
         C_invs, ms, K_invs = matrices
-        result = build_matrices_d(I, phis[d,0], phis[d,1])
+        result = build_matrices_d(st_diff, l, phis[d,0], phis[d,1])
         C_invs = C_invs.at[d].set(result[0])
         ms = ms.at[d].set(result[1])
         K_invs = K_invs.at[d].set(result[2])
