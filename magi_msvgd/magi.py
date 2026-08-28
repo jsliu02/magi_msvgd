@@ -176,6 +176,7 @@ class MAGI(MSVGD):
 
             return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
         super().__init__(magi_logdensity)
+        self.logdensity = magi_logdensity
 
 
     def put(self, dtype=jnp.float32, device=None):
@@ -197,10 +198,10 @@ class MAGI(MSVGD):
             self._put_called = True
 
 
-    def unpack_particles(self):
-        thetas = self.particles[:,:self.p]
-        Xs = self.particles[:,self.p:self.p+self.n*self.D].reshape(self.particles.shape[0], self.n, self.D)
-        sigmas = self.particles[:,self.p+self.n*self.D:]
+    def unpack_particles(self, particles):
+        thetas = particles[:,:self.p]
+        Xs = particles[:,self.p:self.p+self.n*self.D].reshape(particles.shape[0], self.n, self.D)
+        sigmas = particles[:,self.p+self.n*self.D:]
 
         return Xs, thetas, sigmas
     
@@ -281,4 +282,16 @@ class MAGI(MSVGD):
             grad_clip=grad_clip,
             monitor_convergence=monitor_convergence)
         
-        return self.unpack_particles()
+        return self.unpack_particles(self.particles)
+
+    def nuts(self, random_seed=8, warmup_steps=1000, sampling_steps=9000):
+        import blackjax
+        rng_key, warmup_key, sample_key = jax.random.split(jr.key(random_seed), 3)
+
+        warmup = blackjax.window_adaptation(blackjax.nuts, self.logdensity)
+        (state, parameters), _ = warmup.run(warmup_key, position=self.particles_init, num_steps=warmup_steps)
+        
+        kernel = blackjax.nuts(self.logdensity, **parameters)
+        self.nuts_final_state, self.nuts_history = blackjax.util.run_inference_algorithm(sample_key, kernel, initial_state=state, num_steps=sampling_steps)
+
+        return self.unpack_particles(self.nuts_history[0].position)
