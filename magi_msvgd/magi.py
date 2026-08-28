@@ -1,3 +1,4 @@
+import os
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -8,9 +9,15 @@ from functools import partial
 from _helpers import run_initialization
 
 '''
-Dependencies: jax, optax, numpy, tqdm
-Additional helpers dependencies: jaxopt, scipy, sklearn
+Dependencies: jax, optax, msvgd
+Additional helpers dependencies: numpy, scipy
 '''
+
+# Persistent on-disk compilation cache, CWD-based.
+jax.config.update("jax_compilation_cache_dir", os.path.join(os.getcwd(), ".jax_cache"))
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0.0)
+
 class MAGI(MSVGD):
     def __init__(self, ode, data, theta_guess, sigmas=None,
                  theta_conf=0, X_guesses=1, unobs_init_iters=500,
@@ -44,10 +51,6 @@ class MAGI(MSVGD):
             (default: GPU if available, else CPU -- resolved lazily so this class can still be
             imported and used on machines with no GPU)
         '''
-        # validate dtype
-        # self.init_dtype = init_dtype
-        # self.init_device = init_device
-
         if init_device is None:
             init_device = jax.devices()[0]
 
@@ -89,11 +92,6 @@ class MAGI(MSVGD):
         tau = jnp.isfinite(self.x_init)
 
         # number of data observations, shape = (D,)
-        # explicit int32: these are small counts/indices that never need 64-bit range, and
-        # put() only downcasts floating attributes -- leaving these at the platform default
-        # (int64, if constructed while jax_enable_x64 was on for float64 init) would trigger
-        # "Explicitly requested dtype int64 ... truncated to int32" warnings the first time
-        # they're used in arithmetic after put()/solve() disables x64 for float32 sampling.
         self.Ns = tau.sum(axis=0, dtype=jnp.int32)
         self.N = self.Ns.sum().item()
 
@@ -112,15 +110,15 @@ class MAGI(MSVGD):
         else:
             self.sigmas = jnp.array(sigmas, dtype=init_dtype, device=init_device)
             # unknown (needs Bayesian fitting) iff sigma wasn't given AND the component
-            # is observed enough to fit it -- NOT De Morgan's negation of "known", which
-            # would wrongly mark under-observed (Ns<=2) components as unknown too and
-            # give them a phantom, gradient-free sigma particle dimension
+            # is observed enough to fit it
             self.unknown_sigmas = jnp.logical_and(~(self.sigmas >= 0), self.Ns > 2)
 
         # run_initialization is fully JIT-compiled
         initializations = run_initialization(self.ode, self.x_init, self.I, self.tau,
                             self.sigmas, self.phis, self.observed_components, self.unobserved_components,
                             self.theta_conf, self.theta_guess, self.X_guesses, self.unobs_init_iters)
+        # force this to actually execute now to avoid dtype casting race conditions
+        jax.block_until_ready(initializations)
         self.x_init = initializations[0] # (n, d)
         self.theta_init = initializations[1] # (p,)
         self.sigmas = initializations[2] # (n_unknown,)
@@ -133,8 +131,7 @@ class MAGI(MSVGD):
         self.particles = None
         # tracks whether the user has explicitly chosen a dtype/device via put() -- if not,
         # solve() will default to float32 for speed (fp64 is ~3x+ slower for the einsum-heavy
-        # mSVGD gradient, and much worse than that on non-datacenter GPUs), without silently
-        # overriding an explicit choice (including an explicit choice to keep float64).
+        # mSVGD gradient, and much worse than that on non-datacenter GPUs)
         self._put_called = False
 
         # set GP mean priors
@@ -160,12 +157,7 @@ class MAGI(MSVGD):
                 theta = particle[:self.p] # (p,)
                 X = particle[self.p:self.p+self.n*self.D].reshape(self.n, self.D) # (n, d)
                 sigmas = self.sigmas.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
-                # fully-unobserved (Ns=0) dimensions carry a placeholder sigma (0.0) that's
-                # never fit; their log_norm/obs_term contribution is already forced to exactly
-                # zero below (by Ns=0 and tau=False respectively), so any finite value here is
-                # mathematically inert -- but evaluating log(0.0**2) or dividing by 0.0**2
-                # would still produce nan (0*log(0)=nan, 0/0=nan). Substitute a safe nonzero
-                # value only for computing those two terms.
+                # fully-unobserved (Ns=0) dimensions carry a placeholder sigma (0.0) that's never fit
                 safe_sigmas = jnp.where(self.Ns > 0, sigmas, 1.0) # (d,)
 
                 diff_X    = X - self.mu # (n, D)
@@ -173,10 +165,10 @@ class MAGI(MSVGD):
                 ode_resid = (self.ode(X, theta, self.I)
                              - self.mu_dot
                              - jnp.einsum('dnm,md->nd', self.ms, diff_X)) # (n, D)
-    
+
                 Cinv_x    = jnp.einsum('dnm,md->nd', self.C_invs, diff_X) # (n, D)
                 Kinv_r    = jnp.einsum('dnm,md->nd', self.K_invs, ode_resid) # (n, D)
-    
+
                 gp_term   = jnp.sum(diff_X * Cinv_x) # scalar
                 log_norm  = jnp.sum(self.Ns * jnp.log(2 * jnp.pi * safe_sigmas**2)) # scalar
                 obs_term  = jnp.sum(resid_obs**2 / safe_sigmas**2) # scalar
@@ -184,7 +176,7 @@ class MAGI(MSVGD):
 
             return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
         super().__init__(magi_logdensity)
-        
+
 
     def put(self, dtype=jnp.float32, device=None):
             '''
@@ -203,6 +195,16 @@ class MAGI(MSVGD):
                         val = jnp.astype(val, dtype)
                     setattr(self, attr, jax.device_put(val, device))
             self._put_called = True
+
+
+    def unpack_particles(self):
+        thetas = self.particles[:,:self.p]
+        Xs = self.particles[:,self.p:self.p+self.n*self.D].reshape(self.particles.shape[0], self.n, self.D)
+        sigmas = self.particles[:,self.p+self.n*self.D:]
+
+        return Xs, thetas, sigmas
+    
+        
     def solve(
         self,
         k=200,
@@ -258,9 +260,13 @@ class MAGI(MSVGD):
 
         init_key, msvgd_key = jr.split(jr.key(random_seed))
         if self.particles is None:
-            self.particles = self.particles_init + jr.normal(init_key, shape=(k, self.particles_init.shape[0])) * sigma_init
+            particles = self.particles_init + jr.normal(init_key, shape=(k, self.particles_init.shape[0])) * sigma_init
+            if self.unknown_sigmas.sum() > 0: # ensure non-negative sigma initializations
+                sigma_slice = slice(self.p + self.n * self.D, None)
+                particles = particles.at[:, sigma_slice].set(jnp.abs(particles[:, sigma_slice]))
+            self.particles = particles
 
-        particles = super().solve(x0=self.particles,
+        self.particles = super().solve(x0=self.particles,
             mitosis_splits=mitosis_splits,
             random_seed=msvgd_key,
             data=None,
@@ -274,9 +280,5 @@ class MAGI(MSVGD):
             bandwidth=bandwidth,
             grad_clip=grad_clip,
             monitor_convergence=monitor_convergence)
-
-        theta = particles[:,:self.p]
-        X = particles[:,self.p:self.p+self.n*self.D].reshape(particles.shape[0], self.n, self.D)
-        sigmas = particles[:,self.p+self.n*self.D:]
         
-        return theta, X, sigmas
+        return self.unpack_particles()

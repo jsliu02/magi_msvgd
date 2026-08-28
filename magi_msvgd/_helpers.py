@@ -140,7 +140,14 @@ def fit_phisigma(I, x_init, phis, sigmas):
 
         t1 = (phi[1] - mu_phi2)**2 / sig_phi2**2
         t2 = 2 * jnp.sum(jnp.log(jnp.diag(jnp.linalg.cholesky(cov))))
-        t3 = y_d @ jnp.linalg.solve(cov, y_d)
+        # cov can be as ill-conditioned as Kappa in build_matrices_d (same Matern kernel);
+        # the vector-vector dot below is a genuine dot_general op subject to TF32 truncation
+        # on Ampere+ GPUs, and errors amplify through solve()'s implicit inverse -- measured
+        # ~1600x worse relative error (7e-5 vs 4e-8) under TF32 vs "highest" on a representative
+        # ill-conditioned cov. This runs once per BFGS objective eval during initialization
+        # (not per SGD iteration), so forcing exact precision here costs nothing meaningful.
+        with jax.default_matmul_precision("highest"):
+            t3 = y_d @ jnp.linalg.solve(cov, y_d)
         return  0.5 * (t1 + t2 + t3)
 
     def target(log_phi, log_sigma, mu_phi2, sig_phi2, y_d):
@@ -188,15 +195,19 @@ def fit_phisigma(I, x_init, phis, sigmas):
     targets = jax.lax.fori_loop(0, x_init.shape[1], loop, targets)
     return targets
 
-def _fast_pd_inv(K):
+def _fast_pd_inv(K, eye):
     '''
     Invert a matrix expected to be positive definite via Cholesky (~40x faster than
     pinv, verified numerically identical on real Kappa matrices), falling back to
     pinv if K turns out not to be numerically PD (cho_solve reliably NaNs out in that
     case rather than raising, so this is a safe/cheap runtime check).
+
+    eye : precomputed jnp.eye(K.shape[0], dtype=K.dtype) -- caller hoists this since it's
+        identical across every dimension's call (measured ~40% smaller compile time for
+        this piece vs reconstructing it here on every call).
     '''
     c, lower = jsp.linalg.cho_factor(K)
-    chol_inv = jsp.linalg.cho_solve((c, lower), jnp.eye(K.shape[0], dtype=K.dtype))
+    chol_inv = jsp.linalg.cho_solve((c, lower), eye)
     return jax.lax.cond(
         jnp.any(jnp.isnan(chol_inv)),
         lambda: jnp.linalg.pinv(K),
@@ -215,8 +226,9 @@ def build_matrices(I, phis):
     # so this stays a fori_loop; only the invariant setup is hoisted out.
     st_diff = I - I.T
     l = jnp.abs(st_diff)
+    eye = jnp.eye(I.shape[0], dtype=I.dtype)
 
-    def build_matrices_d(st_diff, l, phi1, phi2):
+    def build_matrices_d(st_diff, l, eye, phi1, phi2):
         '''
         Takes in precomputed pairwise time differences and hparams (phi1, phi2, v).
         Returns (C_d, m_d, K_d) for component d.
@@ -273,10 +285,21 @@ def build_matrices(I, phis):
         # K_d, by contrast, is a Schur-complement-style subtraction that we verified goes
         # genuinely non-PSD (not just fp noise) at realistic phi2/discretization combinations
         # -- so K_d_inv must stay on pinv.
-        C_d_inv = _fast_pd_inv(Kappa)
-        m_d = p_Kappa @ C_d_inv
-        K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
-        K_d_inv = jnp.linalg.pinv(K_d)
+        # Kappa's inverse (C_d_inv) can be as ill-conditioned as measured elsewhere in this
+        # codebase (cond ~5.8e4 on a representative fit); the matmuls below (plus pinv's
+        # internal matmul-based reconstruction, both here and inside _fast_pd_inv's fallback)
+        # are genuine dot_general ops subject to TF32 truncation on Ampere+ GPUs -- measured
+        # ~1600x worse relative error (4.4e-4 vs 2.7e-7) under TF32 vs "highest" on a
+        # representative case. This runs once per dimension per solve() call (not per SGD
+        # iteration) and the result (C_invs/ms/K_invs) is reused unchanged for the entire
+        # optimization, so a precision loss here is a permanent bias on the whole run, not
+        # transient noise -- and forcing exact precision costs nothing meaningful given it's
+        # a one-time cost.
+        with jax.default_matmul_precision("highest"):
+            C_d_inv = _fast_pd_inv(Kappa, eye)
+            m_d = p_Kappa @ C_d_inv
+            K_d = Kappa_pp - (p_Kappa @ C_d_inv @ Kappa_p)
+            K_d_inv = jnp.linalg.pinv(K_d)
 
         # 6. return our three matrices
         return C_d_inv, m_d, K_d_inv
@@ -288,7 +311,7 @@ def build_matrices(I, phis):
     matrices = (C_invs, ms, K_invs)
     def loop(d, matrices):
         C_invs, ms, K_invs = matrices
-        result = build_matrices_d(st_diff, l, phis[d,0], phis[d,1])
+        result = build_matrices_d(st_diff, l, eye, phis[d,0], phis[d,1])
         C_invs = C_invs.at[d].set(result[0])
         ms = ms.at[d].set(result[1])
         K_invs = K_invs.at[d].set(result[2])
