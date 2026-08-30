@@ -149,35 +149,82 @@ class MAGI(MSVGD):
         else:
             self.beta_inv = prior_temperature
 
-        def magi_logdensity(particle):
+        def magi_logdensity(particle, data_batch):
             '''
             Full MAGI log-density. (n*d + p + n_unknown_sigmas:,) -> scalar
+
+            data_batch : dict bundling mu, mu_dot, C_invs, ms, K_invs, tau, x_init, I, sigmas,
+                Ns -- passed as an explicit (non-batched, shared-across-particles) MSVGD `data`
+                argument instead of closed over from `self`. A closed-over jnp array gets
+                embedded in the compiled program as a literal HLO constant, which (a) makes
+                compile time scale with its size and (b) makes the compiled executable
+                un-shareable across different MAGI instances (different datasets/fits) even at
+                identical n/D/p/dtype/particle-count shapes, since the embedded literal
+                differs -- every new instance pays a full fresh compile. This matters a lot for
+                simulation studies that create many MAGI instances over different simulated
+                datasets: measured >60s/replication with data closed over (mostly compile
+                time) at a shape that otherwise runs in ~4s once compiled once. Passing data as
+                an explicit jit argument makes the compiled executable purely a function of
+                shape/dtype, so the (already-enabled) persistent compile cache can skip the
+                dominant backend-codegen cost for every replication after the first.
+                self.p/self.n/self.D/self.beta_inv/self.ode stay closed over (Python
+                scalars/a function, not array data). self.unknown_sigmas also stays closed
+                over rather than moving into data_batch: it's used below as a *boolean index*
+                (`.at[unknown_sigmas].set(...)`), which JAX requires to be concrete at trace
+                time -- a traced/dynamic boolean index raises NonConcreteBooleanIndexError.
+                It's also tiny (D-length), so leaving it closed over costs nothing toward the
+                goal above.
             '''
+            mu, mu_dot, C_invs, ms, K_invs, tau, x_init, I, sigmas0, Ns = (
+                data_batch['mu'], data_batch['mu_dot'], data_batch['C_invs'], data_batch['ms'],
+                data_batch['K_invs'], data_batch['tau'], data_batch['x_init'], data_batch['I'],
+                data_batch['sigmas'], data_batch['Ns'])
+
             with jax.default_matmul_precision("highest"):
                 theta = particle[:self.p] # (p,)
                 X = particle[self.p:self.p+self.n*self.D].reshape(self.n, self.D) # (n, d)
-                sigmas = self.sigmas.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
+                sigmas = sigmas0.at[self.unknown_sigmas].set(jnp.clip(particle[self.p+self.n*self.D:], min=1e-5)) # (d,)
                 # fully-unobserved (Ns=0) dimensions carry a placeholder sigma (0.0) that's never fit
-                safe_sigmas = jnp.where(self.Ns > 0, sigmas, 1.0) # (d,)
+                safe_sigmas = jnp.where(Ns > 0, sigmas, 1.0) # (d,)
 
-                diff_X    = X - self.mu # (n, D)
-                resid_obs = jnp.where(self.tau, X - self.x_init, 0.0) # (n, D)
-                ode_resid = (self.ode(X, theta, self.I)
-                             - self.mu_dot
-                             - jnp.einsum('dnm,md->nd', self.ms, diff_X)) # (n, D)
+                diff_X    = X - mu # (n, D)
+                resid_obs = jnp.where(tau, X - x_init, 0.0) # (n, D)
+                ode_resid = (self.ode(X, theta, I)
+                             - mu_dot
+                             - jnp.einsum('dnm,md->nd', ms, diff_X)) # (n, D)
 
-                Cinv_x    = jnp.einsum('dnm,md->nd', self.C_invs, diff_X) # (n, D)
-                Kinv_r    = jnp.einsum('dnm,md->nd', self.K_invs, ode_resid) # (n, D)
+                Cinv_x    = jnp.einsum('dnm,md->nd', C_invs, diff_X) # (n, D)
+                Kinv_r    = jnp.einsum('dnm,md->nd', K_invs, ode_resid) # (n, D)
 
                 gp_term   = jnp.sum(diff_X * Cinv_x) # scalar
-                log_norm  = jnp.sum(self.Ns * jnp.log(2 * jnp.pi * safe_sigmas**2)) # scalar
+                log_norm  = jnp.sum(Ns * jnp.log(2 * jnp.pi * safe_sigmas**2)) # scalar
                 obs_term  = jnp.sum(resid_obs**2 / safe_sigmas**2) # scalar
                 ode_term  = jnp.sum(ode_resid * Kinv_r) # scalar
 
             return -0.5 * (self.beta_inv * gp_term + log_norm + obs_term + self.beta_inv * ode_term)
-        super().__init__(magi_logdensity)
-        self.logdensity = magi_logdensity
+        self._sync_data()
+        super().__init__(magi_logdensity, data=self.data)
+        # nuts() needs a plain 1-arg logdensity_fn (blackjax's API has no data-argument slot);
+        # this wrapper wires the current self.data through by closure, so it doesn't get the
+        # cross-instance compile-sharing benefit above, but nuts() is typically run standalone
+        # rather than across many simulated-dataset replications.
+        self.magi_logdensity = lambda particle: magi_logdensity(particle, self.data)
 
+
+    def _sync_data(self):
+        '''
+        Rebuild the MSVGD `data` bundle (passed as an explicit jit argument to
+        magi_logdensity, see its docstring) from the current top-level GP-matrix/observation
+        attributes. `data` holds separate references, not aliases, to those attributes, so
+        it must be refreshed whenever they change -- currently only put() does that (casting
+        dtype / moving device), so put() calls this at the end.
+        '''
+        self.data = {
+            'mu': self.mu, 'mu_dot': self.mu_dot,
+            'C_invs': self.C_invs, 'ms': self.ms, 'K_invs': self.K_invs,
+            'tau': self.tau, 'x_init': self.x_init, 'I': self.I,
+            'sigmas': self.sigmas, 'Ns': self.Ns,
+        }
 
     def put(self, dtype=jnp.float32, device=None):
             '''
@@ -191,10 +238,13 @@ class MAGI(MSVGD):
             else:
                 jax.config.update("jax_enable_x64", False)
             for attr, val in self.__dict__.items():
+                if attr == 'data':
+                    continue  # rebuilt from the (about-to-be-updated) top-level attrs below
                 if isinstance(val, jax.Array):
                     if jnp.issubdtype(val.dtype, jnp.floating):
                         val = jnp.astype(val, dtype)
                     setattr(self, attr, jax.device_put(val, device))
+            self._sync_data()
             self._put_called = True
 
 
@@ -209,11 +259,11 @@ class MAGI(MSVGD):
     def solve(
         self,
         k=200,
-        sigma_init=0.2,
-        mitosis_splits=0,
+        sigma_init=0.01,
+        k_final=None,
         random_seed=8,
-        optimizer=optax.adam,
-        optimizer_kwargs={"learning_rate": 0.1},
+        optimizer=optax.contrib.prodigy,
+        optimizer_kwargs=dict(),
         batch_size=None,
         is_MAP=False,
         max_iter=10_000,
@@ -231,12 +281,20 @@ class MAGI(MSVGD):
         k                   : int, number of initial particles
         sigma_init          : float, standard deviation for sampling initial state
         Note: If self.particles is not None, solve() will use previous results by default. Set to None to reset.
-        
-        mitosis_splits      : number of particle-doubling steps
-        random_seed         : a jax.random key to sample mitosis jitters
 
-        Note: The following arguments may each be passed as a single value to be used globally
-            or as a list of length `mitosis_splits+1`, containing (possibly different) values for each mitosis phase.
+        k_final             : int or None (default). If None, no particle-count growth happens
+            -- the whole optimization runs at k particles. If set (must be > k), runs one
+            phase at k particles, then a single covariance-matched split directly to k_final
+            particles (see MSVGD._mitotic_split), then a second phase at k_final particles. A
+            single direct jump is simpler and ~1.7x cheaper than growing through several
+            smaller doublings, at a modest coverage cost (measured 44% vs. 47% joint coverage
+            on a real inference problem) -- see msvgd/mitotic_split_variants.py for the
+            comparison and the other splitting strategies considered.
+        random_seed         : a jax.random key to sample the mitotic split
+
+        Note: The following arguments may each be passed as a single value to be used for both
+            phases, or as a list of length 2 (one value per phase) if k_final is set -- a
+            length-2 list when k_final is None is an error, since there's only one phase.
         optimizer           : an optax optimizer constructor, or list thereof, configured for descent
         optimizer_kwargs    : dict of kwargs passed to the optimizer, or list thereof
             Warning : It is necessary in some case for optimizer kwargs to have the same dtype as x0,
@@ -251,7 +309,7 @@ class MAGI(MSVGD):
             updates in batched/stochastic optimization.
 
         monitor_convergence : int — print max grad every N iterations
-            (0 = print status after each mitosis split, < 0 = fully silence)
+            (0 = print status after each phase, < 0 = fully silence)
 
         Note: if put() has not already been called, solve() defaults to float32 (call
         put(dtype=jnp.float64, ...) beforehand if you want float64 sampling instead).
@@ -268,7 +326,7 @@ class MAGI(MSVGD):
             self.particles = particles
 
         self.particles = super().solve(x0=self.particles,
-            mitosis_splits=mitosis_splits,
+            k_final=k_final,
             random_seed=msvgd_key,
             data=None,
             optimizer=optimizer,
@@ -281,17 +339,18 @@ class MAGI(MSVGD):
             bandwidth=bandwidth,
             grad_clip=grad_clip,
             monitor_convergence=monitor_convergence)
-        
+
         return self.unpack_particles(self.particles)
 
+        
     def nuts(self, random_seed=8, warmup_steps=1000, sampling_steps=9000):
         import blackjax
         rng_key, warmup_key, sample_key = jax.random.split(jr.key(random_seed), 3)
 
-        warmup = blackjax.window_adaptation(blackjax.nuts, self.logdensity)
+        warmup = blackjax.window_adaptation(blackjax.nuts, self.magi_logdensity)
         (state, parameters), _ = warmup.run(warmup_key, position=self.particles_init, num_steps=warmup_steps)
         
-        kernel = blackjax.nuts(self.logdensity, **parameters)
+        kernel = blackjax.nuts(self.magi_logdensity, **parameters)
         self.nuts_final_state, self.nuts_history = blackjax.util.run_inference_algorithm(sample_key, kernel, initial_state=state, num_steps=sampling_steps)
 
         return self.unpack_particles(self.nuts_history[0].position)
