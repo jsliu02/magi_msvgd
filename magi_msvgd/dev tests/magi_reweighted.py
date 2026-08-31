@@ -1,12 +1,20 @@
+'''
+Experimental copy of magi.py, identical except it inherits from ReweightedMSVGD
+(msvgd/msvgd_reweighted.py) -- the density-reweighted SVGD kernel from
+"Local KL Convergence Rate for Stein Variational Gradient Descent with Reweighted Kernel"
+-- instead of the standard joint-kernel MSVGD. See msvgd_reweighted.py's module docstring
+for the method, its closed-form derivation, and numerical-stability caveats.
+'''
+
 import os
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
-from msvgd import MSVGD
+from msvgd.msvgd_reweighted import ReweightedMSVGD as MSVGD
 from functools import partial
 
-from _initializer import run_initialization
+from _helpers import run_initialization
 
 '''
 Dependencies: jax, optax, msvgd
@@ -18,7 +26,7 @@ jax.config.update("jax_compilation_cache_dir", os.path.join(os.getcwd(), ".jax_c
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0.0)
 
-class MAGI(MSVGD):
+class ReweightedMAGI(MSVGD):
     def __init__(self, ode, data, theta_guess, sigmas=None,
                  theta_conf=0, X_guesses=1, unobs_init_iters=500,
                  mu=None, mu_dot=None, prior_temperature='default',
@@ -262,7 +270,6 @@ class MAGI(MSVGD):
         sigma_init=0.01,
         k_schedule=None,
         random_seed=8,
-        monitor_convergence=0,
         optimizer=optax.contrib.prodigy,
         optimizer_kwargs=dict(),
         batch_size=None,
@@ -272,7 +279,7 @@ class MAGI(MSVGD):
         rtol=1e-8,
         bandwidth=-1,
         grad_clip=None,
-        reweighted_kernel=True,
+        monitor_convergence=0,
     ):
         '''
         Solve mSVGD optimization for MAGI.
@@ -283,24 +290,19 @@ class MAGI(MSVGD):
         sigma_init          : float, standard deviation for sampling initial state
         Note: If self.particles is not None, solve() will use previous results by default. Set to None to reset.
 
-        k_schedule          : int, list of ints, or None (default). If None, no particle-count
-            growth happens. If an int, behaves as a single split: runs one phase at len(x0) particles,
-            then a single covariance-matched split directly to k_schedule particles, then a second
-            phase at k_schedule particles.\
-            
-            If a list, it must be strictly increasing (each entry greater than the previous, and
-            the first greater than len(x0)): runs one phase at len(x0) particles, then a direct-jump 
-            split to k_schedule[0], then a phase at k_schedule[0] particles, then a split to
-            k_schedule[1], and so on -- len(k_schedule) splits and len(k_schedule)+1 phases in total.
-        random_seed         : a jax.random key to sample the mitotic splits
-        monitor_convergence : int — print max grad every N iterations
-            (0 = print status after each phase, < 0 = fully silence)
+        k_schedule          : int or None (default). If None, no particle-count growth happens
+            -- the whole optimization runs at k particles. If set (must be > k), runs one
+            phase at k particles, then a single covariance-matched split directly to k_schedule
+            particles (see MSVGD._mitotic_split), then a second phase at k_schedule particles. A
+            single direct jump is simpler and ~1.7x cheaper than growing through several
+            smaller doublings, at a modest coverage cost (measured 44% vs. 47% joint coverage
+            on a real inference problem) -- see msvgd/mitotic_split_variants.py for the
+            comparison and the other splitting strategies considered.
+        random_seed         : a jax.random key to sample the mitotic split
 
-        ----------
-        Note: The following arguments may each be passed as a single value to be used for
-            every phase, or as a list of length n_phases (one value per phase), where
-            n_phases = 1 if k_schedule is None, else len(k_schedule)+1 (or 2 if k_schedule is
-            a plain int) -- a list of the wrong length is an error.
+        Note: The following arguments may each be passed as a single value to be used for both
+            phases, or as a list of length 2 (one value per phase) if k_schedule is set -- a
+            length-2 list when k_schedule is None is an error, since there's only one phase.
         optimizer           : an optax optimizer constructor, or list thereof, configured for descent
         optimizer_kwargs    : dict of kwargs passed to the optimizer, or list thereof
             Warning : It is necessary in some case for optimizer kwargs to have the same dtype as x0,
@@ -313,14 +315,10 @@ class MAGI(MSVGD):
         grad_clip           : float or list of floats (one per phase), max global norm for the particle
             gradient before the optimizer step, None to disable. Useful to guard against exploding
             updates in batched/stochastic optimization.
-        reweighted_kernel   : bool or list of bools (one per phase). If True, use the
-            density-reweighted SVGD kernel (from Huang, Dong, Fang [2023]) instead of the standard
-            joint RBF kernel. This amplifies the repulsive force in low-density regions, which counteracts
-            SVGD's typical variance-collapse/underdispersion. Found to give the best credible-interval calibration
-            of several corrective techniques tried on a real, high dimensional ODE-inference benchmark.
-            No effect when is_MAP is True (no kernel is used for MAP estimation).
 
-        ----------
+        monitor_convergence : int — print max grad every N iterations
+            (0 = print status after each phase, < 0 = fully silence)
+
         Note: if put() has not already been called, solve() defaults to float32 (call
         put(dtype=jnp.float64, ...) beforehand if you want float64 sampling instead).
         '''
@@ -339,7 +337,6 @@ class MAGI(MSVGD):
             k_schedule=k_schedule,
             random_seed=msvgd_key,
             data=None,
-            monitor_convergence=monitor_convergence,
             optimizer=optimizer,
             optimizer_kwargs=optimizer_kwargs,
             batch_size=None,
@@ -349,7 +346,7 @@ class MAGI(MSVGD):
             rtol=rtol,
             bandwidth=bandwidth,
             grad_clip=grad_clip,
-            reweighted_kernel=reweighted_kernel)
+            monitor_convergence=monitor_convergence)
 
         return self.unpack_particles(self.particles)
 
