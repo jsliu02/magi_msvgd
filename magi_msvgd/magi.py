@@ -3,9 +3,13 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
+
+
+import sys
+sys.path.append("../../msvgd/msvgd/")
+
 from msvgd import MSVGD
 from functools import partial
-
 from _initializer import run_initialization
 
 '''
@@ -283,42 +287,36 @@ class MAGI(MSVGD):
         sigma_init          : float, standard deviation for sampling initial state
         Note: If self.particles is not None, solve() will use previous results by default. Set to None to reset.
 
-        k_schedule          : int, list of ints, or None (default). If None, no particle-count
-            growth happens. If an int, behaves as a single split: runs one phase at len(x0) particles,
-            then a single covariance-matched split directly to k_schedule particles, then a second
-            phase at k_schedule particles.\
-            
-            If a list, it must be strictly increasing (each entry greater than the previous, and
-            the first greater than len(x0)): runs one phase at len(x0) particles, then a direct-jump 
-            split to k_schedule[0], then a phase at k_schedule[0] particles, then a split to
-            k_schedule[1], and so on -- len(k_schedule) splits and len(k_schedule)+1 phases in total.
+        k_schedule          : int, list of ints, or None (default). None runs one phase at k
+            particles with no growth. Otherwise each entry is the particle count after one
+            covariance-matched split, giving len(k_schedule) splits and len(k_schedule)+1
+            phases; entries must strictly increase, the first exceeding k. An int is shorthand
+            for a single split.
         random_seed         : a jax.random key to sample the mitotic splits
         monitor_convergence : int — print max grad every N iterations
             (0 = print status after each phase, < 0 = fully silence)
 
         ----------
-        Note: The following arguments may each be passed as a single value to be used for
-            every phase, or as a list of length n_phases (one value per phase), where
-            n_phases = 1 if k_schedule is None, else len(k_schedule)+1 (or 2 if k_schedule is
-            a plain int) -- a list of the wrong length is an error.
-        optimizer           : an optax optimizer constructor, or list thereof, configured for descent
-        optimizer_kwargs    : dict of kwargs passed to the optimizer, or list thereof
-            Warning : It is necessary in some case for optimizer kwargs to have the same dtype as x0,
-                e.g. {"learning_rate" : jnp.array(0.1, dtype=x0.dtype)}
-        batch_size          : int or list of ints (one per phase) for batched optimization, None for full dataset
-        is_MAP              : bool or list of bools for whether to mode-find using on the gradient of only the logdensity
-        max_iter            : int or list of ints (one per phase)
+        Note: each argument below takes either one value used for every phase, or a list of
+            n_phases values (one per phase). A list of the wrong length is an error.
+
+        optimizer           : an optax optimizer constructor, configured for descent
+        optimizer_kwargs    : dict of kwargs passed to the optimizer
+            Warning : some optimizer kwargs must share the particle dtype,
+                e.g. {"learning_rate" : jnp.array(0.1, dtype=jnp.float32)}
+        batch_size          : int for batched optimization, None for the full dataset
+        is_MAP              : bool, mode-find on the logdensity gradient alone (no SVGD kernel)
+        max_iter            : int, iteration cap for the phase
         atol, rtol          : convergence tolerances,  all(grad <= atol + rtol * particles)
-        bandwidth           : RBF bandwidths (-1 = median heuristic)
-        grad_clip           : float or list of floats (one per phase), max global norm for the particle
-            gradient before the optimizer step, None to disable. Useful to guard against exploding
-            updates in batched/stochastic optimization.
-        reweighted_kernel   : bool or list of bools (one per phase). If True, use the
-            density-reweighted SVGD kernel (from Huang, Dong, Fang [2023]) instead of the standard
-            joint RBF kernel. This amplifies the repulsive force in low-density regions, which counteracts
-            SVGD's typical variance-collapse/underdispersion. Found to give the best credible-interval calibration
-            of several corrective techniques tried on a real, high dimensional ODE-inference benchmark.
-            No effect when is_MAP is True (no kernel is used for MAP estimation).
+        bandwidth           : RBF bandwidth (-1 = median heuristic)
+        grad_clip           : float, max global norm for the particle gradient before the
+            optimizer step, None to disable. Guards against exploding updates in
+            batched/stochastic optimization.
+        reweighted_kernel   : bool, default True here. Uses the density-reweighted kernel
+            (Huang, Dong, Fang [2023], see MSVGD._reweighted_svgd_update) rather than the
+            standard joint RBF kernel. Amplifies repulsion in low-density regions, countering
+            SVGD's variance-collapse; gave the best credible-interval calibration of the
+            corrective techniques tried on this problem. No effect when is_MAP is True.
 
         ----------
         Note: if put() has not already been called, solve() defaults to float32 (call
