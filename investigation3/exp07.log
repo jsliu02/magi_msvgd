@@ -1,0 +1,22 @@
+re-run with a Gauss-Newton MAP and the Hessian evaluated there:
+E0901 19:36:40.967832   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 17.67GiB (18972033024 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.967971   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 15.90GiB (17074829312 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968091   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 14.31GiB (15367346176 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968208   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 12.88GiB (13830610944 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968323   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 11.59GiB (12447549440 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968436   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 10.43GiB (11202794496 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968547   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 9.39GiB (10082514944 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968661   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 8.45GiB (9074263040 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968778   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 7.61GiB (8166836736 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.968892   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.84GiB (7350152704 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.969001   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.16GiB (6615137280 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.969113   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 5.54GiB (5953623552 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:36:40.969224   55838 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 4.99GiB (5358261248 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+
+baseline  (sampling floor energy = 0.0828)
+               baseline MALA  energy= 0.0815  varwtd= 0.945  dev=  5.2  sdrat=0.975  bias=0.051  acc=0.88  6s
+                baseline pCN  energy= 0.0841  varwtd= 0.894  dev=  5.8  sdrat=0.956  bias=0.052  acc=0.77  6s
+
+noisy s=0.5  (sampling floor energy = 0.0521)
+            noisy s=0.5 MALA  energy= 0.8500  varwtd= 0.953  dev= 20.4  sdrat=1.003  bias=0.250  acc=0.08  5s
+             noisy s=0.5 pCN  energy= 0.2801  varwtd= 0.378  dev= 34.4  sdrat=0.745  bias=0.134  acc=0.52  6s

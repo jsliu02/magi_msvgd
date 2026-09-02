@@ -1,0 +1,29 @@
+Gaussian VI on the mean (Sigma fixed at H^-1)
+ iter  n_samp  |E[grad]| (natural)     bias   (MAP bias 0.3332, SVGD ~0.068, floor 0.034)
+    1     500              0.48497   0.2601
+    5     500     2594656203.74626 510397002.9068
+/home/jamie/miniforge3/envs/magi/lib/python3.14/site-packages/numpy/_core/_methods.py:132: RuntimeWarning: overflow encountered in reduce
+  ret = umr_sum(arr, axis, dtype, out, keepdims, where=where)
+    7     500   non-finite gradient, stopping
+
+    1    4000              0.39801   0.2560
+    5    4000       11989145.54855 2155786.9073
+    7    4000   non-finite gradient, stopping
+
+covariance check: Hessian at MAP vs averaged over q
+/home/jamie/miniforge3/envs/magi/lib/python3.14/site-packages/numpy/linalg/_linalg.py:2767: RuntimeWarning: overflow encountered in dot
+  sqnorm = x.dot(x)
+  12 Hessians in 0.2s;  ||Hbar - H_MAP||/||H_MAP|| = inf
+
+                   variant            width%NUTS   dev  R_glob   R_th  energy   bias  sdrat               profile soft->stiff
+-----------------------------------------------------------------------------------------------------------------------------
+              N(MAP, H^-1)   [103.7 102.8  89.5]   5.7   1.163  1.128   1.423  0.333  0.985   [0.956 0.979 1.012 1.009 1.009]
+   N(VI-mean n=500,  H^-1)            [0. 0. 0.] 100.0     nan    nan 1116907999834439723615151156423073102377931868004179772113420288.000 30977454333684483378309770859462630706993096894383398051643392.000 298943811126712211180274606251575978108309733376.000  [2.36775633e+94 7.05603959e+93 3.19930908e+93 6.84357987e+92
+ 2.18489674e+92]
+   N(VI-mean n=4000, H^-1)            [0. 0. 0.] 100.0     nan    nan 40746117185088977222677330788691108159308169216.000 1130093959899249942723143552498080374002286592.000 19746742562908474896424108032000.000  [2.10879730e+61 6.58564867e+60 3.33299082e+60 5.41947345e+59
+ 2.40946217e+59]
+       N(VI-mean, Hbar^-1)            [0. 0. 0.] 100.0     nan    nan 40746117185088977222677330788691108159308169216.000 1130093959899249942723143552498080374002286592.000 19746742562908474896424108032000.000  [2.10879730e+61 6.58564867e+60 3.33299082e+60 5.41947345e+59
+ 2.40946217e+59]
+        NUTS k=800 (floor)   [103.2  95.   97.7]   3.5   1.003  0.975   0.048  0.034  1.003   [0.995 1.01  0.999 1.009 1.   ]
+
+saved -> exp07_vi_results.json

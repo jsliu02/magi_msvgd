@@ -126,6 +126,8 @@ def fit_phisigma(I, x_init, phis, sigmas):
     Fit phi and sigma for all components via scipy numerical optimization.
     '''
     I_max = I.max()
+    I_span = I_max - I.min()
+    dt = jnp.median(jnp.diff(I.ravel())) if I.shape[0] > 1 else I_span   # I is (n, 1)
     Id_n = jnp.identity(I.shape[0], dtype=I.dtype)
     # n (and hence the FFT frequency index array) is the same for every component's column
     # of x_init, so this only needs to be built once instead of once per dimension
@@ -172,17 +174,39 @@ def fit_phisigma(I, x_init, phis, sigmas):
 
         sigma_d = sigmas[d]
 
+        # Scale-free parameterisation. The optimisation runs on phi = scale * exp(u) starting at
+        # u = 0, so it begins at the data's own marginal variance and at the lengthscale the FFT
+        # already estimated, rather than at phi1 = phi2 = sigma = 1 whatever the units happen to
+        # be. That start is not a detail: on the HIV benchmark the variance scale is 5.6e4, so
+        # starting at 1 is five orders out, and BFGS -- whose step sizes and convergence
+        # tolerances are absolute in its own variables -- settles on a lengthscale of 1e-4 against
+        # a grid spacing of 0.1. That fits the observations as white noise and leaves every state
+        # between them unconstrained, which no amount of care in the posterior approximation can
+        # undo. In the scaled variables a unit step means a factor of e in phi regardless of the
+        # units, so the optimiser behaves the same way on every component of every system.
+        # Usable lengthscale range. Below a couple of grid spacings the GP stops constraining the
+        # states between observations; approaching the full span it breaks the derivative kernel
+        # outright -- at phi2 = 20.6 on HIV, whose span is 20, K^-1 comes out indefinite with
+        # eigenvalues from -24 to +11 and its Cholesky in the solver is NaN. Both ends are
+        # properties of the discretisation rather than of the data, so the fit is confined to
+        # them and the diagnostic reports the resulting lengthscale either way.
+        ell_lo, ell_hi = 2.0 * dt, 0.25 * I_span
+        s1 = jnp.maximum(jnp.mean(y_d ** 2), jnp.finfo(x_init.dtype).tiny)   # zero-mean GP
+        s2 = jnp.clip(mu_phi2, ell_lo, ell_hi)
+        lg2 = jnp.log(jnp.array([s1, s2], dtype=x_init.dtype))
+        lg3 = jnp.concatenate([lg2, jnp.log(jnp.sqrt(s1))[None].astype(x_init.dtype)])
+
         def unknown_sigma(sigma_d, mu_phi2, sig_phi2, y_d):
-            objective = lambda log_phisigma: target(log_phisigma[:2], log_phisigma[2], mu_phi2, sig_phi2, y_d)
+            objective = lambda u: target(lg3[:2] + u[:2], lg3[2] + u[2], mu_phi2, sig_phi2, y_d)
             result = jsp_optimize.minimize(objective, x0=jnp.zeros(3, dtype=x_init.dtype), method="BFGS")
-            fitted = jnp.exp(result.x)
-            return fitted
+            f = jnp.exp(lg3 + result.x)
+            return f.at[1].set(jnp.clip(f[1], ell_lo, ell_hi))
 
         def known_sigma(sigma_d, mu_phi2, sig_phi2, y_d):
-            objective = lambda log_phi: target(log_phi, jnp.log(sigma_d), mu_phi2, sig_phi2, y_d)
+            objective = lambda u: target(lg2 + u, jnp.log(sigma_d), mu_phi2, sig_phi2, y_d)
             result = jsp_optimize.minimize(objective, x0=jnp.zeros(2, dtype=x_init.dtype), method="BFGS")
-            fitted = jnp.exp(result.x)
-            return jnp.array([*fitted, sigma_d], dtype=x_init.dtype)
+            f = jnp.exp(lg2 + result.x)
+            return jnp.array([f[0], jnp.clip(f[1], ell_lo, ell_hi), sigma_d], dtype=x_init.dtype)
 
         # note: sigma_d = 0 indicates known zero-variance data or unobserved component
         fitted = jax.lax.cond(jnp.isnan(sigma_d) | (sigma_d < 0),

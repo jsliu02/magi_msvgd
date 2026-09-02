@@ -1,0 +1,775 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.05in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,citecolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\xmap}{x_{\star}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Rhat}{\widehat{R}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{definition}
+\newtheorem{condition}{Condition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{\bfseries A fast, self-certifying Gaussian posterior\\[2pt] for MAGI ODE parameter inference}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+MAGI \cite{yang2021} infers ODE parameters from noisy, partially observed trajectories by placing a
+Gaussian process prior on the state and conditioning on the ODE holding at a discretisation grid.
+Its posterior is high dimensional --- the states outnumber the parameters by two orders of
+magnitude --- so practitioners reach either for a long MCMC run or for the Laplace approximation
+$\mathcal{N}(\xmap, H^{-1})$ at the maximum a posteriori point. We show the latter is worse than it
+looks. On a FitzHugh--Nagumo benchmark it is mis-centred by a \emph{full posterior standard
+deviation} on two of the three ODE parameters while its credible intervals have very nearly the
+right width, so nothing in the output signals the error.
+
+We give a pipeline that removes it in about one second. Three observations drive it. First, with
+the observation noise fixed the MAGI log-density is \emph{exactly} a sum of squares, so the mode is
+a nonlinear least-squares problem and Gauss--Newton reaches $\|\nabla \log p\| \approx 10^{-7}$ in
+$0.05$\,s where a first-order optimiser stalls at $10^{3}$; the same structure yields the exact
+Hessian from one Jacobian assembly rather than $d$ autodiff passes. Second, the residual error is
+almost entirely in the mean, and the standard third-order Laplace correction removes $90$--$99\%$
+of it. Third, a second and independently derived mean --- the stationary point of the reverse-KL
+Gaussian objective, solved by a Newton iteration preconditioned on a screened low-dimensional
+subspace --- supplies a \emph{reference-free} error estimate: the two derivations can only agree
+closely if both are near the truth, and their disagreement relative to the size of the correction
+separates the regimes where the expansion is valid from those where it is not by more than thirty
+orders of magnitude.
+
+We also give an exactness condition. If the vector field is affine in the state at fixed parameters
+--- linear compartment models, linear pharmacokinetics, any constant-coefficient system, and much
+weaker than joint affineness --- then $p(X \mid \theta)$ is exactly Gaussian, the $325$-dimensional
+problem is exactly a $3$-dimensional one, and no approximation is required. The condition is
+testable in two Hessian evaluations.
+
+We report several negative results, including that on this problem Stein variational gradient
+descent does not merely converge slowly: started \emph{at} a correct answer it moves away from it,
+degrading energy distance by a factor of $45$--$80$ while holding marginal standard deviations at
+$0.99$ of the reference.
+\end{abstract}
+
+\section{Introduction}
+
+Inferring the parameters $\theta \in \R^{p}$ of an ODE system $\dot x = f(x,\theta)$ from noisy,
+sparsely sampled observations is a classical inverse problem made awkward by the need to solve the
+ODE inside the likelihood. MAGI \cite{yang2021} avoids the solver: it places a Gaussian process
+prior on each state component, discretises time onto a grid $I = \{t_1,\dots,t_n\}$, and conditions
+on the ODE residual being small at every grid point. The unknown becomes the concatenation of the
+parameters and the state trajectory,
+\[
+  x = (\theta, X) \in \R^{d}, \qquad d = p + nD,
+\]
+with $D$ the number of state components. On the FitzHugh--Nagumo benchmark used throughout this
+paper, $p=3$, $n=161$, $D=2$ and $d = 325$: the trajectory outnumbers the parameters $107$ to one.
+
+This dimensionality is the practical difficulty. A well-tuned Hamiltonian sampler works but costs
+minutes, and --- as we document in Section~\ref{sec:experiments} --- a configuration that converges
+at one data density can fail to converge at another without that being obvious. The cheap
+alternative is the Laplace approximation at the mode. Section~\ref{sec:diagnosis} shows that on
+this problem the Laplace approximation is wrong in a specific and dangerous way: the covariance is
+essentially right, so the credible intervals have the right \emph{width}, while the mean is off by
+a full posterior standard deviation on two of the three parameters. An analyst reading the output
+sees nothing amiss.
+
+\paragraph{Contributions.}
+\begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
+\item A characterisation of the Laplace error on MAGI posteriors: it lives in the mean, not the
+covariance, and we localise the residual covariance error to a handful of directions that cancel
+out of every marginal (Section~\ref{sec:diagnosis}).
+\item A deterministic pipeline --- Gauss--Newton mode, exact structural Hessian, third-order mean
+correction --- costing about one second at $d = 325$ and reducing the largest parameter error by
+$2$ to $10\times$ at every setting tested (Sections~\ref{sec:lsq}--\ref{sec:correction}).
+\item A reference-free certificate and the demonstration that a naive version of it fails: the
+plain Gaussian-VI fixed point diverges, and restricting it to a screened subspace is what makes it
+both convergent and cheap (Section~\ref{sec:certify}).
+\item An exact discrepancy identity for the Gauss--Newton Gaussian, and an exactness condition on
+the vector field under which no approximation is needed (Section~\ref{sec:theory}).
+\item A methodological point that materially changed our own conclusions twice: in $d = 325$ the
+usual covariance metrics are dominated by the reference chain's own sampling error and are
+meaningless without a calibrated floor (Section~\ref{sec:floors}); and an error averaged over all
+$d$ coordinates is dominated by trajectory states and can rank estimators backwards relative to the
+parameters one actually wants (Section~\ref{sec:estimator}).
+\end{enumerate}
+
+\section{The MAGI posterior as nonlinear least squares}
+\label{sec:lsq}
+
+\subsection{Setup}
+
+Write $\mu, \dot\mu \in \R^{n \times D}$ for the GP prior mean and its time derivative on the grid,
+$C_d^{-1}, K_d^{-1} \in \R^{n\times n}$ for the prior and conditional-derivative precisions of
+component $d$, $m_d$ for the corresponding conditional-mean operator, $\tau$ for the observation
+mask, $y$ for the observations, $\sigma$ for the observation noise scale, and $\beta^{-1}$ for the
+prior tempering factor. The MAGI log-density is
+\begin{equation}
+\label{eq:logp}
+-2\log p(x) = \beta^{-1}\!\!\sum_d \|X_{\cdot d}-\mu_{\cdot d}\|^2_{C_d^{-1}}
+  + \sum_{d}\frac{\|\tau_{\cdot d}\odot (X_{\cdot d}-y_{\cdot d})\|^2}{\sigma_d^2}
+  + \beta^{-1}\!\!\sum_d \|r_d(x)\|^2_{K_d^{-1}} + c(\sigma),
+\end{equation}
+with ODE residual $r_d(x) = f_d(X,\theta) - \dot\mu_{\cdot d} - m_d (X_{\cdot d}-\mu_{\cdot d})$.
+
+\subsection{Exact sum-of-squares structure}
+
+\begin{proposition}[Least-squares form]
+\label{prop:lsq}
+With $\sigma$ held fixed, \eqref{eq:logp} is exactly a sum of squares. Writing $L_cL_c^\top =
+C^{-1}$ and $L_kL_k^\top = K^{-1}$ and $b = \beta^{-1}$,
+\begin{equation}
+\label{eq:residual}
+  -2\log p(x) = \|R(x)\|^2 + \text{const},\qquad
+  R(x) = \begin{bmatrix}
+    \sqrt{b}\, L_c^\top (X-\mu)\\[2pt]
+    (X-y)/\sigma \;\text{ on observed entries}\\[2pt]
+    \sqrt{b}\, L_k^\top\big(f(X,\theta)-\dot\mu-m(X-\mu)\big)
+  \end{bmatrix} \in \R^{3nD}.
+\end{equation}
+\end{proposition}
+
+\noindent
+We verified \eqref{eq:residual} numerically against \eqref{eq:logp} to $8.4\times10^{-12}$. Two
+consequences carry the rest of the paper.
+
+\emph{Only the third block is nonlinear, and only through $f$.} Hence the residual Jacobian is
+assembled from $n$ small \emph{pointwise} derivatives $\partial f/\partial(X_i,\theta) \in
+\R^{D\times(D+p)}$ obtained by autodiff on the user's vector field, plus constant precomputed
+blocks. The Gauss--Newton and observation blocks contribute a constant term to $J^\top J$, so the
+normal equations are formed without ever materialising $J \in \R^{3nD \times d}$.
+
+\emph{The second derivative of the residual is the second derivative of the ODE.} Differentiating
+\eqref{eq:residual} twice,
+\begin{equation}
+\label{eq:hessR}
+  \nabla^2 R_a = \sqrt{b}\,(L_k^\top)_a\, \nabla^2 f \qquad\text{(pointwise in the grid index)},
+\end{equation}
+so the exact Hessian of $U = -\log p$ is
+\begin{equation}
+\label{eq:hess}
+  H(x) = \nabla^2 U = J(x)^\top J(x) + \textstyle\sum_a R_a(x)\,\nabla^2 R_a(x),
+\end{equation}
+in which the second term is $n$ small $(D{+}p)\times(D{+}p)$ blocks scattered into place. This
+costs one Jacobian assembly rather than the $d$ forward passes \code{jax.hessian} would take; we
+measured agreement with \code{jax.hessian} to $2.5\times10^{-9}$.
+
+\subsection{The Gauss--Newton mode}
+
+Proposition~\ref{prop:lsq} makes the mode a nonlinear least-squares problem, so Gauss--Newton
+applies, damped in the manner of Levenberg and Marquardt, and converges quadratically near the
+solution. This matters more than it may appear. The FitzHugh--Nagumo Hessian is conditioned around $2\times10^4$, where a
+first-order optimiser stalls far from the mode \emph{while appearing to converge}: Prodigy
+terminates at $\|\nabla\log p\| = 1.3\times 10^3$, a log-density $8.7$ nats below the mode, whereas
+Gauss--Newton reaches $2.5\times10^{-7}$ in $0.05$\,s. Everything downstream --- the
+metric, the correction, the certificate --- inherits that error. An earlier iteration of this work
+was conducted on the stalled mode and reached materially different conclusions; the displacement
+from mode to posterior mean was inflated threefold.
+
+Unknown $\sigma$ is handled by block coordinate descent: Gauss--Newton on $(\theta, X)$ at fixed
+$\sigma$, alternating with the exact conditional maximiser $\sigma_d^2 = \sum_{\text{obs}}(X-y)^2/N_d$.
+Both blocks decrease the same objective. The whole iteration runs inside one \code{lax.while\_loop}
+with no host synchronisation and one compilation per solver instance.
+
+\section{Diagnosis: the error is in the mean}
+\label{sec:diagnosis}
+
+\subsection{Calibrating the metrics}
+\label{sec:floors}
+
+Before any comparison we must know what agreement is achievable. In $d = 325$ the affine-invariant
+covariance metrics are dominated by the error in the \emph{reference's own} covariance estimate:
+with $n_{\text{eff}}$ effective draws the eigenvalues of a sample covariance spread by roughly
+$\pm 2\sqrt{d/n_{\text{eff}}}$, and a metric that is an rms over all $325$ of them inherits that.
+
+We use three: the mean error $\text{bias} = \|\Sigma_g^{-1/2}(\mu_q-\mu_g)\|/\sqrt d$ in posterior
+standard deviations per dimension; the F\"orstner distance
+$\|\log(\Sigma_g^{-1/2}\Sigma_q\Sigma_g^{-1/2})\|_F/\sqrt d$; and $\mathrm{KL}(q\,\|\,\mathcal{N}(\mu_g,\Sigma_g))$.
+Splitting an eight-chain, $64{,}000$-draw gold standard four-and-four gives F\"orstner $0.1538$;
+inverting that against synthetic draws puts the chain's effective sample size at $27{,}791$
+($43\%$), from which the floor for a \emph{noiseless} approximation scored against the full chain is
+F\"orstner $0.0767$, bias $0.0042$, KL $0.48$. For scale, inflating the gold covariance uniformly by
+$1.25\times$ scores F\"orstner $0.2231$ --- indistinguishable from what the Laplace covariance
+scores. Comparisons reported without this calibration are not interpretable, and we found this
+changed the sign of our reading of one experiment.
+
+\subsection{What the Laplace approximation gets wrong}
+
+Table~\ref{tab:diagnosis} scores $\mathcal{N}(\xmap, H^{-1})$ against the gold standard on the
+quantities a practitioner reads.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+quantity & $\mathcal{N}(\xmap,H^{-1})$ & $+$ third order & gold half (floor) \\
+\midrule
+$\theta_b$ mean error      & $\mathbf{-0.971}$ sd & $-0.010$ sd & $+0.017$ sd \\
+$\theta_c$ mean error      & $\mathbf{+1.032}$ sd & $+0.093$ sd & $-0.008$ sd \\
+$\theta_a$ mean error      & $+0.246$ sd & $+0.034$ sd & $+0.009$ sd \\
+trajectory max mean error  & $1.015$ sd  & $0.115$ sd  & $0.042$ sd \\[2pt]
+$\theta$ sd ratios         & $1.00/1.01/0.94$ & $0.99/1.01/0.94$ & $1.00/0.99/1.01$ \\
+trajectory sd ratio (median) & $0.983$ & $0.985$ & $0.993$ \\
+\bottomrule
+\end{tabular}
+\caption{The Laplace error at the baseline data density. The interval \emph{widths} are within a
+few percent of a second independent reference run; two of the three parameter estimates are
+centred a full standard deviation away.}
+\label{tab:diagnosis}
+\end{table}
+
+This is the failure mode that matters in practice, because it is invisible. A user inspecting
+posterior summaries sees plausible intervals of plausible width.
+
+\subsection{Where the residual covariance error lives}
+
+Three independent lines say the covariance is not worth chasing.
+
+\emph{The residual error is real but hides in the null space of every marginal.} Scoring the
+Laplace covariance against each half of the gold chain separately gives per-direction
+log-variance errors correlated at $0.975$ (a pure-noise control gives $0.852$), so the error is
+genuine. But it concentrates in about twenty directions holding $17\%$ of the posterior variance:
+binning by variance share, the top five directions ($78.5\%$ of the variance) have rms log-ratio
+$0.040$, the next twenty ($17.3\%$) have $0.245$, and the remaining three hundred ($4.2\%$) have
+$0.03$. Those twenty are combinations that cancel out of every parameter marginal and every
+pointwise trajectory band, which is why Table~\ref{tab:diagnosis} shows standard deviations within
+$1$--$6\%$ while the aggregate F\"orstner distance sits at three times its floor.
+
+\emph{At this data density, a method that demonstrably fixes marginal variances does not move the
+joint covariance.} We
+built Tierney--Kadane Laplace marginals \cite{tierney1986} along screened directions (Section~\ref{sec:screen})
+using a bordered Gauss--Newton profile. For a unit direction $v$ the marginal of $z = v^\top(x-\mu)$
+satisfies, to second order,
+\[
+  \log p_{\text{marg}}(z) = -U_{\text{prof}}(z) - \tfrac12\log\det H_\perp(z) + \text{const},
+  \qquad U_{\text{prof}}(z) = \min\{U(x) : v^\top(x-\mu) = z\},
+\]
+and two identities make it cheap: the constrained Gauss--Newton step is the unconstrained step plus
+a multiple of $A^{-1}v$, reusing the \emph{same} Cholesky factor, and for unit $v$,
+$\det(N^\top H N) = \det(H)\,(v^\top H^{-1} v)$ for any orthonormal basis $N$ of $v^\perp$, so the
+restricted determinant never requires the $(d{-}1)$-dimensional basis. At $0.31$\,s per direction it
+cut the mean marginal-variance error from $4.68\%$ to $1.66\%$, fixing the two worst directions from
+$+8.7\%$ to $+0.8\%$ and $+6.7\%$ to $+1.0\%$. Its effect on the joint covariance was F\"orstner
+$0.2243 \to 0.2237$, for $13$\,s. We do not recommend it \emph{here}; Section~\ref{sec:covscaling}
+revises this for harder settings, where the F\"orstner distance turns out to be the wrong thing to
+have judged it on.
+
+\emph{Sampled metrics cannot resolve the effect.} At $800$ draws the standard error of a
+variance-weighted ratio is comparable to the $3$--$5\%$ effect being measured; it reported the
+correction as a slight loss while the analytic comparison showed each corrected direction moving
+decisively toward truth. Analytic approximations should be scored analytically.
+
+\section{Correcting the mean}
+\label{sec:correction}
+
+\subsection{Third-order Laplace expansion}
+
+The standard third-order correction to the posterior mean \cite{tierney1986,kass1990} is
+\begin{equation}
+\label{eq:third}
+  \E[x] \;\approx\; \mu_3 \;:=\; \xmap - \tfrac12 H^{-1}\nabla \tr\!\big(H^{-1}\nabla^2 U\big),
+\end{equation}
+evaluated here with the exact Hessian \eqref{eq:hess}. It costs one gradient of a scalar built from
+a Hessian --- $0.39$\,s at $d=325$ once compiled.
+
+That \eqref{eq:third} should be needed at all is worth making concrete. Along the softest
+eigendirection of $H$ the potential is not remotely quadratic: its relative departure from the
+quadratic model is $1.85$ at one posterior standard deviation, $19.7$ at four and $114$ at sixteen,
+while along stiff directions it is $0$ to four decimals. That direction carries roughly $20\%$ of
+the total posterior variance.
+
+\subsection{Gaussian variational inference, and why the obvious iteration diverges}
+
+Minimising $\mathrm{KL}(q\|p)$ over Gaussians gives, by the Bonnet and Price theorems,
+\begin{equation}
+\label{eq:vi}
+  \E_q[\nabla\log p] = 0, \qquad \Sigma^{-1} = \E_q[-\nabla^2\log p],
+\end{equation}
+so the Laplace approximation is precisely the zeroth iterate of a fixed point built from quantities
+already available. The natural iteration $\mu \leftarrow \mu + \Sigma\,\E_q[\nabla\log p]$
+\textbf{diverges}, for two reasons with one cause.
+
+The mean step overshoots by about $1.6\times$ (measured step $0.2751$ against a correct $\approx
+0.17$, with Monte Carlo error only $0.0025$) because the correct Newton preconditioner is
+$\E_q[H]$, not $H(\xmap)$. These differ enormously: on the screened subspace we measure
+$\E_q[H]/H(\xmap)$ between $6$ and $10$ at the baseline setting and $2121$ at the sparsest. The
+average curvature of the potential over the posterior is an order of magnitude above its curvature
+at the mode.
+
+The covariance step explodes because a $325\times325$ matrix average over a few hundred samples has
+$O(\sqrt{d/n})$ eigenvalue noise that inversion amplifies; one step took the trace ratio from
+$1.007$ to $2.125$.
+
+\begin{remark}[Antithetic pairing is load-bearing]
+Our first estimator of $\E_q[\nabla\log p]$ produced noise four times the size of the signal. The
+$O(\delta)$ term dominates the variance and is odd, so evaluating at $\mu\pm\delta$ cancels it
+exactly. Spherical cubature is worse than useless here: its $2d$ nodes sit at $\sqrt d \approx 18$
+posterior standard deviations along a single axis, deep in the region where the degree-six
+polynomial dominates, and it diverged immediately.
+\end{remark}
+
+\subsection{A curvature screen}
+\label{sec:screen}
+
+Both failures are cured by refusing to estimate what the samples cannot support. Along eigenvector
+$v_j$ of $H$, with unit equal to one posterior standard deviation $s_j = \lambda_j^{-1/2}$, define
+\begin{equation}
+\label{eq:screen}
+  q_j \;=\; \frac14\sum_{t\in\{-2,-1,1,2\}}\left|\,\frac{U(\mu + t s_j v_j)}{t^2/2} - 1\,\right|,
+\end{equation}
+which is zero if and only if the slice is exactly quadratic. It costs \emph{four batched
+log-density evaluations for all $d$ directions} ($0.15$\,s), ranks them at Spearman $0.760$ against
+the true error, and its top five directions capture $71\%$ of the variance-weighted Laplace error
+(top ten, $85\%$).
+
+The screen is a good detector and a poor estimator: along the softest direction the slice is $185\%$
+steeper than quadratic at one standard deviation while the true marginal is only $8\%$ too narrow,
+the gap being the complement relaxing as one moves. We use it only to choose a subspace.
+
+\subsection{Low-rank Gaussian VI}
+
+Let $S$ index the $m$ largest $q_j$ and $V_S$ the corresponding eigenvectors. Restricted to $S$,
+$\E_q[H]$ is an $m\times m$ block --- a well-determined estimate instead of an impossible one --- and
+because $S$ is spanned by eigenvectors of $H$ the corrected curvature is block diagonal in $H$'s
+eigenbasis and inverts in closed form:
+\begin{equation}
+\label{eq:woodbury}
+  A = H + V_S\Delta V_S^\top,\qquad
+  A^{-1} = \sum_{i\notin S}\frac{v_iv_i^\top}{\lambda_i} + V_S\big(\mathrm{diag}(\lambda_S)+\Delta\big)^{-1}V_S^\top .
+\end{equation}
+Only $V_S^\top H(x) V_S$ is ever needed, so $m$ Hessian-\emph{vector} products per sample replace a
+$d\times d$ assembly. The iteration $\mu \leftarrow \mu + A^{-1}\E_q[\nabla\log p]$ then converges
+in three steps, the step size falling $0.166 \to 0.0147 \to 0.0034 \to 0.0004$.
+
+\subsection{Which mean to report}
+\label{sec:estimator}
+
+We obtain two corrected means: $\mu_3$ from \eqref{eq:third} and $\mu_{\text{VI}}$ from
+\eqref{eq:woodbury}. Both are $O(\Lambda)$-accurate with different $O(\Lambda^2)$ residuals, so
+their midpoint is a natural third candidate.
+
+Scored as an error averaged over all $325$ coordinates the midpoint wins ($0.0234$ against $0.0268$
+at baseline). Scored on the ODE parameters the ranking reverses, and by a wider margin: see
+Table~\ref{tab:estimator}. The average is dominated by the $322$ trajectory states; the three
+parameters are what the method exists to estimate. \textbf{We default to $\mu_3$}, giving up $13\%$
+on the average to gain a factor of three on the parameters.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{3}{c}{largest $|\theta$ error$|$ (reference sd)} & all-coordinate \\
+\cmidrule(lr){2-4}
+setting & $\xmap$ & $\mu_3$ & midpoint & bias, $\mu_3$ vs mid \\
+\midrule
+baseline & $1.033$ & $\mathbf{0.099}$ & $0.297$ & $0.0268$ vs $\mathbf{0.0234}$\\
+half     & $1.579$ & $\mathbf{0.164}$ & $0.616$ & $0.0934$ vs $\mathbf{0.0508}$\\
+noisy    & $2.607$ & $1.337$ & $\mathbf{1.069}$ & $0.4370$ vs $\mathbf{0.1719}$\\
+quarter  & $1.760$ & $\mathbf{0.446}$ & diverged & $0.3356$ vs --- \\
+\bottomrule
+\end{tabular}
+\caption{The two metrics rank the estimators oppositely. We report $\mu_3$; the midpoint is
+available for callers whose target is the trajectory.}
+\label{tab:estimator}
+\end{table}
+
+\subsection{When the covariance does matter}
+\label{sec:covscaling}
+
+The preceding subsection is a statement about the baseline data density, and it does not
+generalise. From the identity \eqref{eq:identity} the leading mean shift is driven by the cubic
+term and is $O(\Lambda)$, whereas a covariance correction requires the quartic term or the square
+of the cubic, both $O(\Lambda^{2})$. The covariance error is therefore negligible at small
+$\Lambda$ and grows \emph{faster} than the mean error --- so the two must converge as a problem
+becomes more non-Gaussian, and the question is only where the crossover lies.
+
+Across our four settings, which span a factor of $200$ in measured non-Gaussianity, the ratio of
+(mean error / its floor) to (covariance error / its floor) falls from $15.4$ at baseline to
+$3.3$--$6.6$ at the harder settings, as predicted. In the units a user reads, the largest error in
+a parameter standard deviation is
+
+\begin{center}\small
+\begin{tabular}{lcccc}
+\toprule
+ & baseline & half & noisy & quarter \\
+$\kappa_S$ & $10.4$ & $45.8$ & $166.8$ & diverged \\
+\midrule
+largest $\theta$ sd error, $H^{-1}$ & $6.9\%$ & $17.7\%$ & $\mathbf{70.0\%}$ & $36.6\%$\\
+after the profile correction & $\mathbf{0.9\%}$ & $\mathbf{6.4\%}$ & $\mathbf{22.0\%}$ & $\mathbf{11.6\%}$\\
+reference half-vs-half floor & $1.8\%$ & $1.7\%$ & $3.6\%$ & $3.1\%$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At $\sigma = 0.5$ the Laplace standard deviation for $\theta_b$ is $1.70$ times the reference's ---
+a credible interval $70\%$ too wide, against a half-vs-half ratio of $1.0035$, so this is real. The
+covariance is emphatically worth chasing there.
+
+The tool that fixes it is the profile construction dismissed above, applied along the parameter
+coordinate axes rather than along eigenvectors, with two repairs: the quadrature grid must be
+bracketed on the \emph{profile's} own scale rather than the Laplace scale (at $\sigma = 0.5$ a
+$\pm4.5$ Laplace-sd grid reaches $\pm7.6$ true standard deviations, where $H_\perp$ loses positive
+definiteness and the Cholesky fails), and nodes at which $H_\perp$ is indefinite must be dropped
+rather than poisoning the direction. It costs about $1.8$\,s per parameter and takes $\theta_b$
+from $1.700$ to $0.960$ at the noisy setting and from $1.366$ to $1.033$ at the sparsest.
+
+It is not uniformly safe: at the noisy setting it degraded $\theta_c$ from $1.8\%$ to $22\%$ error
+while repairing $\theta_b$ from $70\%$ to $4\%$. It improves the worst case at every setting we
+tried and should be run when $\kappa_S$ is large, but it is a repair for a Gaussian that is
+already in trouble, not a routine step.
+
+Our original dismissal of the method was an artefact of scoring it on the affine-invariant
+F\"orstner distance, which weights all $325$ directions equally and is dominated by its own noise
+floor. The parameter marginals are what a practitioner reads, and on those the method works.
+
+\section{Certification without a reference}
+\label{sec:certify}
+
+\subsection{Certificates}
+
+Everything above needs a reference chain to score. For deployment the question is whether the
+method knows when it is failing. Four quantities, none requiring a reference:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+\item $d_A$: $\|H_{XX}(\theta,X_1)-H_{XX}(\theta,X_2)\|/\|H_{XX}\|$ at two states sharing one
+$\theta$; zero exactly under Condition~\ref{cond:A} below. Two Hessian evaluations.
+\item $q_{\max}$: the largest screen value \eqref{eq:screen}. Four batched log-density evaluations.
+\item $\kappa_S$: $\max_j \E_q[H]_{jj}/H_{jj}$ over the screened subspace.
+\item $\rho$: the \emph{gate statistic} $\|\mu_3-\mu_{\text{VI}}\|_H/\|\mu_3-\xmap\|_H$.
+\end{itemize}
+
+$\rho$ is the important one. $\mu_3$ is a Taylor truncation of the posterior mean;
+$\mu_{\text{VI}}$ is the exact stationary point of the reverse-KL Gaussian objective. Neither is the
+truth and they come from genuinely different arguments, so they can only agree closely if both are
+near it. Normalising by the size of the correction makes the statistic dimensionless and
+self-scaling.
+
+\subsection{What the gate does and does not diagnose}
+
+Table~\ref{tab:certify} gives the certificates and the errors they are meant to predict.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrr@{\hskip 1.2em}rrr}
+\toprule
+& \multicolumn{4}{c}{reference-free} & \multicolumn{3}{c}{needs a reference} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-8}
+setting & $q_{\max}$ & $\kappa_S$ & $\tau_{\text{end}}$ & $\rho$
+        & $|\theta|$ err $\xmap$ & $|\theta|$ err $\mu_3$ & $\Rhat$ \\
+\midrule
+baseline (41 obs)   & $4.95$  & $10.4$    & $1{\cdot}10^{-4}$ & $0.198$ & $1.033$ & $0.099$ & $1.030$\\
+half (21 obs)       & $20.8$  & $45.8$    & $3{\cdot}10^{-4}$ & $0.278$ & $1.579$ & $0.164$ & $1.121$\\
+noisy ($\sigma$ 0.5)& $48.9$  & $167$     & $3{\cdot}10^{-2}$ & $0.244$ & $2.607$ & $1.337$ & $1.025$\\
+quarter (11 obs)    & $932$   & $9.6{\cdot}10^{32}$ & $5{\cdot}10^{34}$ & $3.2{\cdot}10^{34}$ & $1.760$ & $0.446$ & $1.105$\\
+\bottomrule
+\end{tabular}
+\caption{Certificates against truth. The gate statistic $\rho$ separates the regimes by more than
+thirty orders of magnitude, but what it diagnoses is the breakdown of the VI solve, not the
+validity of $\mu_3$.}
+\label{tab:certify}
+\end{table}
+
+At the three denser settings $\rho$ lies in $0.20$--$0.28$; at the sparsest the VI iteration
+diverges and $\rho$ exceeds $10^{34}$. Any threshold in that gap works; we use $0.5$.
+
+We initially used $\rho$ to \emph{suppress} the correction, reporting $\xmap$ when the gate fired.
+Better reference chains showed this to be wrong. At \code{quarter}, $\mu_3$ improves the largest
+parameter error from $1.760$ to $0.446$ even though the VI has diverged; suppressing costs $1.3$
+standard deviations of parameter accuracy to save about a fifth of a standard deviation averaged
+over $322$ trajectory coordinates. The correction is therefore applied unconditionally and the gate
+\emph{warns}: it reports that the low-rank VI has broken down and, with it, that the Gaussian over
+the trajectory block should not be trusted, and that the user should escalate to a sampler.
+
+\begin{remark}[A trust region destroys the statistic]
+Bounding the VI step keeps a diverging iterate near $\mu_3$, which makes the two estimates look as
+though they agree: at \code{quarter} a trust region pulled $\rho$ from $3\times10^{34}$ down to
+$0.30$, below the threshold and wrong. The runaway magnitude is the signal and must not be damped.
+\end{remark}
+
+\section{Theory}
+\label{sec:theory}
+
+\subsection{An exact discrepancy identity}
+
+Let $\delta = x - \xmap$ and let $E(\delta) = R(\xmap+\delta) - R_\star - J\delta$ be the residual's
+nonlinear remainder, with $R_\star = R(\xmap)$.
+
+\begin{proposition}[Exact discrepancy]
+\label{prop:identity}
+Let $q = \mathcal{N}(\xmap, (J^\top J)^{-1})$ be the Gauss--Newton Gaussian. Stationarity at the mode
+gives $R_\star^\top J = 0$, whence, with no truncation of any kind,
+\begin{equation}
+\label{eq:identity}
+  \log q(x) - \log p(x) \;=\; (R_\star + J\delta)^\top E(\delta) \;+\; \tfrac12\|E(\delta)\|^2 \;+\; \text{const}.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+$-2\log p = \|R_\star + J\delta + E\|^2 = \|R_\star\|^2 + 2R_\star^\top J\delta + \delta^\top J^\top
+J\delta + 2(R_\star+J\delta)^\top E + \|E\|^2$. The cross term $R_\star^\top J\delta$ vanishes by
+stationarity, and $-2\log q = \delta^\top J^\top J \delta + \text{const}$.
+\end{proof}
+
+By \eqref{eq:hessR} the entire departure from Gaussianity is thus carried by $\nabla^2 f$.
+
+\subsection{An exactness condition}
+
+\begin{condition}[Affine in the state]
+\label{cond:A}
+$f(\cdot,\theta)$ is affine in the state $X$ for every $\theta$.
+\end{condition}
+
+\begin{proposition}[Exact conditional Gaussianity]
+\label{prop:condA}
+Under Condition~\ref{cond:A} the residual is affine in $X$ at fixed $\theta$, $R = R_0(\theta) +
+A(\theta)X$, so
+\[
+  U(\theta,X) = U\big(\theta,X^\star(\theta)\big) + \tfrac12(X-X^\star)^\top A^\top A (X-X^\star),
+  \qquad X^\star(\theta) = -(A^\top A)^{-1}A^\top R_0,
+\]
+is exactly quadratic in $X$. Hence $p(X\mid\theta)$ is exactly Gaussian with covariance
+$(A^\top A)^{-1}$, and integrating $X$ out is exact:
+\begin{equation}
+\label{eq:marginal}
+  \log p(\theta) = -U\big(\theta, X^\star(\theta)\big) - \tfrac12\log\det\!\big(A(\theta)^\top A(\theta)\big) + \text{const}.
+\end{equation}
+\end{proposition}
+
+The $d$-dimensional problem is then exactly a $p$-dimensional one, solvable by quadrature with no
+MCMC and no Gaussian assumption on $\theta$; the only error is quadrature error, controlled by
+adding nodes until the answer stops moving.
+
+Condition~\ref{cond:A} is much weaker than requiring $f$ affine in $(X,\theta)$ jointly: $\theta$
+may still multiply states, as it does in our test case through $c(V+R)$. It covers linear
+compartment models, linear pharmacokinetics and every constant-coefficient system. Setting the
+FitzHugh--Nagumo cubic coefficient to zero satisfies it, and we measure $d_A = 0.00\times10^{0}$
+exactly there against $1.30\times10^{-1}$ for the true cubic field. Evaluating \eqref{eq:marginal}
+with three structurally different quadrature rules --- Gauss--Hermite $9^3$, Gauss--Hermite $13^3$
+and a uniform $21^3$ grid over $\pm5$ standard deviations --- agrees to all six printed decimals
+(means $0.085448, 0.562092, 0.811322$), confirming convergence rather than a shared blind spot. The
+Laplace parameter means there are off by $0.008$, $0.035$ and $0.027$ standard deviations.
+
+\subsection{Why we do not report an a priori bound}
+
+Identity \eqref{eq:identity} combined with $\|E(\delta)\| \le \tfrac12\Lambda\|\delta\|^2$,
+$\Lambda = \sqrt{b}\,\|L_k\|\,L_2$ and $L_2 = \sup\|\nabla^2 f\|$, gives a rigorous bound. It is not
+useful. Sweeping the cubic coefficient $\alpha$ from $0$ to $1$ we measure $\Lambda = 2012, 1588,
+2548, 4173$ while the correction size varies as $0.005, 0.010, 0.111, 0.174$; the ratio
+$\|\mu_3-\xmap\|/\Lambda$ varies by a factor of $17$. A supremum over the posterior bulk is far too
+loose in $325$ dimensions. The measured certificates of Section~\ref{sec:certify} are the honest
+substitute: they are computed rather than bounded, and they were validated against references.
+
+The same sweep does show the diagnostics are coherent and monotone: at $\alpha = 0$, $d_A = 0$,
+$\kappa_S = 1.18$ and $\rho = 0.0012$ --- every certificate independently and correctly reporting
+that Laplace is exact --- rising monotonically to $d_A = 0.130$, $\kappa_S = 10.4$, $\rho = 0.198$ at
+$\alpha = 1$.
+
+\section{The pipeline}
+
+Algorithm~\ref{alg:pipeline} assembles the pieces. Lines 1--3 are the deterministic answer and
+account for two thirds of the cost; lines 4--13 exist to certify it, and produce a second mean as a
+by-product. Nothing in the loop requires a $d\times d$ Hessian: line 10 needs only $m$
+Hessian-vector products per sample, and line 11 inverts an $m\times m$ block through
+\eqref{eq:woodbury}. The covariance is $H^{-1}$ throughout --- Section~\ref{sec:diagnosis} found
+nothing cheap that improves on it.
+
+Three choices in the algorithm are less arbitrary than they look, and each was arrived at by a
+failure. The antithetic draw on line 8 is not variance reduction for its own sake but the
+difference between a convergent and a divergent iteration. The spectral floor on line 10 is what
+makes the Newton step a descent direction when sampling noise pushes an ill-conditioned block
+indefinite, which happens in single precision. And the absence of a trust region on line 11 is
+deliberate: bounding the step would make a diverging iterate resemble a converged one and destroy
+the statistic computed on line 13.
+
+\begin{algorithm}[t]
+\DontPrintSemicolon
+\SetAlgoLined
+\KwIn{MAGI model; subspace size $m=12$; antithetic pairs $N=256$; gate $0.5$}
+\KwOut{$\mathcal{N}(\mu,\Sigma)$ and certificates}
+$\xmap \leftarrow$ Gauss--Newton on $\|R\|^2$ \tcp*[r]{$0.05$\,s}
+$H \leftarrow J^\top J + \sum_a R_a\nabla^2R_a$ at $\xmap$; eigendecompose; $\Sigma \leftarrow H^{-1}$ \tcp*[r]{$0.30$\,s}
+$\mu_3 \leftarrow \xmap - \tfrac12\Sigma\nabla\tr(\Sigma\,\nabla^2 U)$ \tcp*[r]{$0.39$\,s}
+$q_j \leftarrow$ slice-curvature screen \eqref{eq:screen} for all $d$ directions \tcp*[r]{$0.15$\,s}
+$S \leftarrow$ indices of the $m$ largest $q_j$\;
+$\mu \leftarrow \xmap$\;
+\For{$k = 1$ \KwTo $6$}{
+  draw antithetic $\{\pm\delta_i\}_{i\le N}$ from $\mathcal{N}(0,\Sigma)$\;
+  $g \leftarrow$ mean of $\nabla\log p$ over the $2N$ points\;
+  $B \leftarrow$ mean of $V_S^\top H V_S$ by HVP; floor its spectrum\;
+  $\mu \leftarrow \mu + A^{-1}g$ with $A^{-1}$ from \eqref{eq:woodbury} \tcp*[r]{no trust region}
+}
+$\rho \leftarrow \|\mu_3-\mu\|_H/\|\mu_3-\xmap\|_H$; warn if $\rho \ge 0.5$\;
+\Return{$\mathcal{N}(\mu_3, \Sigma)$}
+\caption{Deterministic MAGI posterior, $\approx 1.1$\,s at $d=325$}
+\label{alg:pipeline}
+\end{algorithm}
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+
+FitzHugh--Nagumo, $\dot V = c(V - V^3/3 + R)$, $\dot R = -(V - a + bR)/c$, on $t\in[0,20]$ with a
+$161$-point grid, $d = 325$. Four settings vary the data: \emph{baseline} ($41$ observations per
+component, $\sigma = 0.2$), \emph{half} ($21$), \emph{quarter} ($11$), \emph{noisy} ($41$, $\sigma =
+0.5$). At \code{quarter}, $22$ data points constrain $325$ unknowns plus three parameters --- close
+to unidentified, and not a regime in which any Gaussian approximation should be expected to work.
+
+\subsection{References, and a warning about them}
+
+References are NUTS \cite{hoffman2014} via BlackJAX, preconditioned by the exact Hessian: we sample
+$y = H^{1/2}(x-\xmap)$ with an identity mass matrix. The metric affects only efficiency, never the
+stationary distribution, so using the object under test as the preconditioner is not circular. The
+baseline reference is $400$ chains of $150$ draws ($\Rhat = 1.03$); the three harder settings use
+$64$ chains of $2000$, for reasons given below.
+
+Credibility rests on the baseline, where an independent eight-chain gold standard exists: the
+preconditioned run matches it \emph{better than the gold chain matches itself}, at bias $0.0056$
+(half-vs-half floor $0.0095$), F\"orstner $0.1358$ (floor $0.1538$) and KL $1.50$ (floor $1.90$).
+
+We stress a negative finding about the fallback. Our first references used $400$ chains of $150$
+draws --- the same total cost --- and reached $\Rhat$ of $1.16$, $1.48$ and $1.77$ on the three
+harder settings while giving $1.03$ at baseline. Being the exact method does not make a particular
+run correct, and a configuration validated at one data density can silently fail at another. The
+longer configuration reaches $\Rhat = 1.03$, $1.12$, $1.03$, $1.11$; \code{half} nonetheless reports
+$6.2\%$ divergences, so we treat it as indicative. Conclusions in Table~\ref{tab:certify} that
+depend on \code{half} and \code{quarter} should be read accordingly.
+
+\subsection{Main result}
+
+Table~\ref{tab:estimator} is the headline: the largest parameter error falls by factors of $10.4$,
+$9.6$, $1.9$ and $3.9$ across the four settings. In energy distance over the whole vector, measured
+in Mahalanobis coordinates against a floor set by scoring one $2000$-draw subsample of the reference
+against another, the corrected Gaussian reaches $0.0397$ at baseline against a floor of $0.0331$ ---
+at $2000$ draws it is not distinguishable from the reference chain.
+
+\subsection{Ablations}
+
+\emph{Hyperparameters.} $m = 12$ and $m = 24$ give \emph{identical} results, so the screened
+subspace saturates --- an independent confirmation that the screen finds the right subspace --- while
+$m=6$ is materially worse ($\rho = 0.064$ against $0.034$). $N$ from $256$ to $2048$ and three seeds
+move $\rho$ by $\pm3\%$. The knobs were held fixed across every setting reported, so no result here
+is the product of per-setting tuning.
+
+\emph{Precision.} Single precision is the production default and is essentially free: the
+correction agrees with its float64 value to $6.7\times10^{-4}$ relative, a gap of $0.00007$ posterior
+standard deviations against a correction of $0.17$ and a floor of $0.006$, and the resulting bias is
+identical to four decimals. The float32 mode stalls at $\|\nabla\log p\| = 2.9\times10^{-2}$ rather
+than $5.4\times10^{-7}$, far below the level that affects anything downstream. This does depend on
+forcing full-precision matmuls: the einsums in the log-density are matrix--vector contractions in
+the forward pass, but their VJPs are matrix--matrix products, so on tensor-core hardware the
+\emph{gradient} loses about four significant digits by default ($5.1\times10^{-7} \to 3.9\times10^{-3}$)
+while the forward value is bit-identical. The value is not the thing to test. At the \code{noisy}
+setting the VI solve does diverge in float32 where float64 converges; the gate catches it.
+
+\subsection{Cost}
+
+Algorithm~\ref{alg:pipeline} costs about $1.1$\,s at $d = 325$, against $144$\,s for the shortest
+preconditioned NUTS run that is trustworthy at baseline and considerably more elsewhere. A cheaper
+NUTS configuration ($400$ chains, $50$ warmup, $5$ draws, $159$ gradient evaluations, $21$\,s)
+already reaches the sampling floor in energy distance, so the honest comparison is roughly
+$20\times$, not $130\times$, if only distributional summaries are wanted --- but that configuration
+provides no usable $\Rhat$.
+
+\section{Negative results}
+
+We record these because each cost us time and none is obvious in advance.
+
+\emph{Stein variational gradient descent does not converge slowly here; it converges to the wrong
+thing.} Starting mSVGD \emph{at} the corrected Gaussian --- a known-good answer --- and running it,
+energy distance degrades from $0.085$ to $3.80$ (density-reweighted kernel \cite{huang2023}) or
+$6.89$ (standard RBF), and the Stein-identity ratio falls from $1$ to $0.24$ and $0.019$. The
+reweighted kernel is the more instructive failure: it holds marginal standard deviations at
+$0.991$ of the reference --- visually perfect credible intervals --- while being far from the target.
+Since the starting point was correct, the motion is unambiguously away from it, and no
+initialisation strategy can help.
+
+\emph{The Tierney--Kadane profile machinery is not worth it at the baseline density} --- correct,
+$13$\,s, no gain on the joint covariance --- but this does not extend to harder settings, where it
+is the only thing we found that repairs a badly wrong parameter interval
+(Section~\ref{sec:covscaling}). We record it here mainly because judging it on the F\"orstner
+distance was a mistake.
+
+\emph{Unrestricted Gaussian VI diverges}, and a trust region that stops it diverging destroys the
+diagnostic (Section~\ref{sec:certify}).
+
+\emph{Spherical cubature} is unusable in this geometry: its nodes sit $18$ posterior standard
+deviations out.
+
+\emph{``Self-consistent Laplace''} --- recomputing $H$ at $\mu_3$ and reapplying \eqref{eq:third} ---
+diverges by roughly nine orders of magnitude, because \eqref{eq:third} is derived \emph{at the
+mode}, where $\nabla U = 0$; restoring the missing $-\Sigma\nabla U$ term simply recovers the VI
+iteration.
+
+\section{Limitations}
+
+The evidence is one ODE system at four data densities. The gate threshold sits in a gap spanning
+thirty orders of magnitude and is not delicate, but the claim that $\mu_3$ improves the parameters
+\emph{unconditionally} rests on four settings and should be re-examined on other vector fields,
+particularly stiff and multimodal ones. Two of the four reference chains are imperfect ($\Rhat =
+1.12$ with $6.2\%$ divergences, and $\Rhat = 1.11$).
+
+The pipeline leaves the covariance at $H^{-1}$, which Section~\ref{sec:covscaling} shows is
+defensible only while $\kappa_S$ is small. We do not currently fold the profile repair into the
+pipeline, because it is not uniformly safe and we have four settings on one vector field on which
+to judge it; a user whose $\kappa_S$ is large should either run it per parameter and check, or use
+a sampler.
+
+Unknown observation noise is handled in the mode but the Gaussian approximation over $\sigma$ is
+weaker than over $(\theta,X)$, since $\sigma$ is positivity-constrained and enters the log-density
+through a clip; the structural Hessian \eqref{eq:hess} does not cover it and we fall back to a
+generic one.
+
+Finally, the pipeline returns a Gaussian. Where the posterior is genuinely non-Gaussian --- which the
+certificates will say --- there is no substitute for a sampler.
+
+\section{Conclusion}
+
+The MAGI posterior is exactly a nonlinear least-squares problem, and taking that structure seriously
+pays three times over: a mode accurate to $10^{-7}$ in $0.05$\,s, an exact Hessian from one Jacobian
+assembly, and an explicit characterisation of what makes the posterior non-Gaussian. The
+consequence of practical importance is that the default Laplace approximation is mis-centred by a
+full posterior standard deviation on the parameters of interest while looking entirely healthy, and
+that about a second of arithmetic fixes it and reports how far it can be trusted.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{yang2021} S.~Yang, S.~W.~K.~Wong, S.~C.~Kou.
+  Inference of dynamic systems from noisy and sparse data via manifold-constrained Gaussian processes.
+  \emph{PNAS} 118(15), 2021.
+\bibitem{tierney1986} L.~Tierney, J.~B.~Kadane.
+  Accurate approximations for posterior moments and marginal densities.
+  \emph{JASA} 81(393):82--86, 1986.
+\bibitem{kass1990} R.~E.~Kass, L.~Tierney, J.~B.~Kadane.
+  The validity of posterior expansions based on Laplace's method. In
+  \emph{Bayesian and Likelihood Methods in Statistics and Econometrics}, 1990.
+\bibitem{hoffman2014} M.~D.~Hoffman, A.~Gelman.
+  The No-U-Turn sampler. \emph{JMLR} 15:1593--1623, 2014.
+\bibitem{huang2023} C.~Huang, H.~Dong, W.~Fang.
+  Detecting and mitigating mode-collapse for flow-based sampling / density-reweighted Stein kernels, 2023.
+\bibitem{opper2009} M.~Opper, C.~Archambeau.
+  The variational Gaussian approximation revisited. \emph{Neural Computation} 21(3):786--792, 2009.
+\bibitem{forstner2003} W.~F\"orstner, B.~Moonen.
+  A metric for covariance matrices. In \emph{Geodesy--The Challenge of the 3rd Millennium}, 2003.
+\end{thebibliography}
+
+\end{document}

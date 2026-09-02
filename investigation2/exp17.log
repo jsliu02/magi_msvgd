@@ -1,0 +1,30 @@
+/home/jamie/storage-1/github-repos/magi_msvgd/investigation2/exp17_sav.py:20: UserWarning: Explicitly requested dtype float64 requested in asarray is not available, and will be truncated to dtype float32. To enable more dtypes, set the jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell environment variable. See https://github.com/jax-ml/jax#current-gotchas for more.
+  Sig_h = jnp.asarray((V / np.sqrt(evc)) @ V.T, jnp.float64)
+E0901 12:26:16.662672   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 17.67GiB (18972033024 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.662903   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 15.90GiB (17074829312 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.663107   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 14.31GiB (15367346176 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory  N(SAV-mean n=1024, H^-1)   [103.5 101.8  89.5]   5.3   1.084  1.554   0.083  0.061  0.990   [0.963 0.972 1.019 1.01  1.017]
+        NUTS k=800 (floor)   [103.2  95.   97.7]   3.5   1.003  0.975   0.048  0.034  1.003   [0.995 1.01  0.999 1.009 1.   ]
+
+saved -> exp17_sav_results.json
+cate device memory: INTERNAL: [0] Failed to allocate 11.59GiB (12447549440 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.663671   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 10.43GiB (11202794496 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.663859   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 9.39GiB (10082514944 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.663991   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 8.45GiB (9074263040 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.664116   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 7.61GiB (8166836736 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.664240   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.84GiB (7350152704 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.664361   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.16GiB (6615137280 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 12:26:16.664483   21065 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 5.54GiB (5953623552 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+MAP bias 0.3332   SVGD-mean bias ~0.068   floor 0.034
+     n        opt  iters     bias    sec
+   256   adam1e-3    600   0.0764    1.5
+   256   adam1e-2    600   0.0745    1.4
+  1024   adam1e-3    600   0.0541    2.4
+  1024   adam1e-2    600   0.0513    2.3
+
+                   variant            width%NUTS   dev  R_glob   R_th  energy   bias  sdrat               profile soft->stiff
+-----------------------------------------------------------------------------------------------------------------------------
+              N(MAP, H^-1)   [105.8 104.   90. ]   6.6   1.153  1.260   1.446  0.335  0.991   [0.962 0.981 1.015 1.009 1.014]
+  N(SAV-mean n=1024, H^-1)   [103.5 101.8  89.5]   5.3   1.084  1.554   0.083  0.061  0.990   [0.963 0.972 1.019 1.01  1.017]
+        NUTS k=800 (floor)   [103.2  95.   97.7]   3.5   1.003  0.975   0.048  0.034  1.003   [0.995 1.01  0.999 1.009 1.   ]
+
+saved -> exp17_sav_results.json

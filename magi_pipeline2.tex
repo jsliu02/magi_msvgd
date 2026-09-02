@@ -1,0 +1,1015 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.05in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,citecolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\xmap}{x_{\star}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Rhat}{\widehat{R}}
+\newcommand{\khat}{\widehat{k}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{definition}
+\newtheorem{condition}{Condition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{\bfseries Profiling the states out:\\[2pt]
+posterior inference for MAGI without a Gaussian assumption}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+MAGI \cite{yang2021} infers ODE parameters by placing a Gaussian process prior on the state and
+constraining it to satisfy the dynamics on a discretisation grid. Its posterior is dominated
+numerically by the states, which outnumber the parameters by two orders of magnitude, and the
+standard summary---a Gaussian at the maximum a posteriori point---is mis-centred by a full
+posterior standard deviation on a benchmark as benign as FitzHugh--Nagumo.
+
+We argue that the states should not be approximated at all. They are the part of the problem the
+data and the GP prior constrain most tightly, and integrating them out by Laplace at each parameter
+value leaves a $p$-dimensional integral with $p$ between $3$ and $7$, which can be done directly.
+The resulting posterior is a mixture, one Gaussian in the states per parameter node, and makes no
+Gaussian assumption about the parameters whatsoever. On every benchmark in our suite that has a usable
+reference, its largest parameter error is at or below the level at which two independent halves of
+that reference agree with each other: $0.0126$ against a floor of $0.0100$ on FitzHugh--Nagumo,
+$0.0093$ against $0.0081$ on HIV, and $0.0119$ against $0.0405$ on the chaotic Lorenz system, where
+the mode alone is $1.80$ out. It costs between three and twenty-three seconds against roughly two
+hundred and up for a reference chain, and it reports its own reliability without one.
+
+Getting there required correcting several things upstream, of which the largest was not in the
+inference at all. MAGI's GP hyperparameters are fitted by an optimiser started at
+$\phi_1 = \phi_2 = \sigma = 1$ regardless of the data's units; on a benchmark whose states have
+marginal variance $5.6\times10^4$ this settles on a lengthscale four orders below the grid
+spacing, so the GP imposes no smoothness, the trajectory interpolates the observations and is
+unconstrained between them, and the parameters absorb the difference. Putting that fit on a
+scale-free footing moves the trajectory error on that system from $69.5\%$ to $0.4\%$ and takes its
+Hessian condition number from $4\times10^{17}$ to $4\times10^{2}$. Separately, the Gauss--Newton
+normal equations square the Jacobian's condition number, which for parameters in mixed units is
+repaired by one line of diagonal scaling; the benchmark suite's forward Euler integrator carried
+more error than the observation noise it was competing with; and MAGI's implementation omits the
+prior $\pi_\Theta(\theta)$ that its own derivation includes.
+
+We therefore also report a pre-inference diagnosis, costing seconds and no sampling, that
+establishes whether the mode is a mode, whether it is the only one, which parameters the data
+determines, whether the posterior is proper, and whether the GP constrains the states at all. The
+last of these is the one that mattered: the others reported the broken hyperparameter fit
+faithfully as a property of the model.
+\end{abstract}
+
+\section{Introduction}
+
+Estimating the parameters $\theta \in \R^p$ of $\dot x = f(x,\theta)$ from sparse noisy
+observations is awkward because the likelihood contains an ODE solve. MAGI \cite{yang2021} removes
+it: a Gaussian process prior on each state component, a discretisation grid $I$, and a constraint
+that the GP satisfy the dynamics on that grid. The unknown becomes
+\[
+  x = (\theta, X) \in \R^d, \qquad d = p + nD,
+\]
+and on the four systems we study $d$ runs from $106$ to $608$ while $p$ runs from $3$ to $7$.
+
+That imbalance is the whole story of this paper. Almost all of the dimension is state, and the
+state is the part of the problem that the observations and the GP prior pin down; the parameters
+are few and are what the exercise is for. Approximating everything at once with a Gaussian at the
+mode---the default summary---spends its accuracy in the wrong place, and we show it is mis-centred
+by a full posterior standard deviation on the parameters even when the covariance is nearly right,
+so nothing in the output looks wrong. Sampling the joint posterior properly is possible but costs
+minutes and, as we document, can fail silently on exactly the problems where it is most needed.
+
+\paragraph{Contributions.}
+\begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
+\item A posterior approximation that profiles the states out and integrates the parameters
+directly (Section~\ref{sec:profiled}), reaching the reference chain's own agreement floor on every
+benchmark that has a usable reference, in three to twenty-three seconds, and reporting its
+reliability without a reference.
+\item A Gaussian-process hyperparameter fit that is scale-free (Section~\ref{sec:gp}). MAGI's
+optimiser starts at $\phi_1=\phi_2=\sigma=1$ whatever the data's units, and on states with
+marginal variance $5.6\times10^4$ it converges to a lengthscale four orders below the grid
+spacing, so the prior imposes no smoothness at all. This was the largest error we found, it was
+upstream of everything else, and it invalidated several of our own earlier conclusions.
+\item A pre-inference diagnosis built from the mode and its exact Hessian
+(Section~\ref{sec:diagnosis}): mode validity, globality, identifiability, properness, whether the
+GP constrains the states, and how badly conditioned the geometry a sampler would face is---in
+seconds and without sampling.
+\item The observation that MAGI's implementation omits the $\pi_\Theta(\theta)$ term of its own
+derivation (Section~\ref{sec:prior}), together with a retraction of the demonstration we had built
+on it, which turned out to be measuring the hyperparameter bug of Section~\ref{sec:gp}.
+\item Two corrections without which none of the above is measurable: diagonal scaling of the
+Gauss--Newton normal equations (Section~\ref{sec:solver}), and a benchmark integrator whose error
+is below the observation noise (Section~\ref{sec:bench}).
+\item Negative results, including that the local curvature of the profiled marginal is provably
+equal to the joint Laplace's, so profiling buys nothing near the mode
+(Section~\ref{sec:negative}).
+\end{enumerate}
+
+This paper continues \cite{companion}, which established the exact least-squares structure of the
+MAGI posterior and a Gauss--Newton mode solver, and proposed a third-order correction to the
+Laplace mean. That correction is superseded here: it helped on one of the four systems and harmed
+two, and the profiled posterior of Section~\ref{sec:profiled} dominates it everywhere. Those
+comparisons were made before the hyperparameter fit, so they describe a different set of
+posteriors; we have not re-run them, because the correction is not the recommended method under
+either.
+
+\section{The MAGI posterior and its mode}
+\label{sec:solver}
+
+\subsection{Least-squares structure}
+
+With the observation noise held fixed, MAGI's negative log-posterior is exactly a sum of squares
+\cite{companion}. Writing $L_cL_c^\top = C^{-1}$, $L_kL_k^\top = K^{-1}$, $b = \beta^{-1}$ for the
+prior tempering, and $P$ for the parameter prior precision introduced in Section~\ref{sec:prior},
+\begin{equation}
+\label{eq:residual}
+  -2\log p(x) = \|R(x)\|^2 + \text{const},\qquad
+  R(x) = \begin{bmatrix}
+    \sqrt{b}\, L_c^\top (X-\mu)\\
+    (X-y)/\sigma \;\text{ on observed entries}\\
+    \sqrt{b}\, L_k^\top\big(f(X,\theta)-\dot\mu-m(X-\mu)\big)\\
+    P^{1/2}(\theta - \theta_0)
+  \end{bmatrix}.
+\end{equation}
+Only the third block is nonlinear and only through $f$, so $\nabla^2 R_a = \sqrt b\,(L_k^\top)_a
+\nabla^2 f$ pointwise, and the exact Hessian $H = J^\top J + \sum_a R_a \nabla^2 R_a$ costs one
+Jacobian assembly rather than $d$ autodiff passes. The fourth block is linear, so a parameter prior
+---including a full precision matrix---leaves this structure untouched.
+
+\subsection{The normal equations square the condition number}
+
+The solver forms $A = J^\top J$ and factorises it, which is far faster than a QR least-squares
+solve and squares $\kappa(J)$. Whether that matters is not a property of the science but of the
+units. Table~\ref{tab:cond} shows what happens on HIV, whose parameters
+$\theta = (36, 0.108, 0.5, 1000, 3)$ are rate constants on different scales: the $\theta$-block
+curvature spans $3\times10^{-6}$ to $5\times10^{2}$, $\kappa(A)$ reaches $4\times10^{17}$, and the
+Cholesky is meaningless.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+& $\kappa(A)$ & $\kappa(DAD)$ & unscaled $\|\nabla\log p\|$ & scaled $\|\nabla\log p\|$ & unscaled s & scaled s\\
+\midrule
+fn     & 4.4e3 & 3.9e3 & 2.2e-07 & 2.8e-07 & 2.00 & \textbf{1.31}\\
+hes1   & 2.2e3 & 1.0e2 & \textbf{3.8e-12} & 3.9e-09 & 1.82 & \textbf{1.21}\\
+hiv    & \textbf{4.1e17} & \textbf{8.4e10} & \textbf{1.7e-02} & \textbf{6.3e-09} & 3.40 & \textbf{2.38}\\
+lorenz & 9.6e4 & 7.5e3 & 4.1e-09 & 4.3e-08 & 1.77 & \textbf{1.26}\\
+\bottomrule
+\end{tabular}
+\caption{Symmetric diagonal scaling of the Gauss--Newton solve. Seven orders of magnitude where
+the parameters are in mixed units; slightly worse where they are not, though every value there is
+far below any tolerance a user would set.}
+\label{tab:cond}
+\end{table}
+
+The repair is symmetric diagonal scaling,
+\begin{equation}
+\label{eq:jacobi}
+  D = \operatorname{diag}(A)^{-1/2},\qquad (DAD + \lambda I)\,s = -Dg,\qquad \delta = Ds,
+\end{equation}
+identical in exact arithmetic and completely different in floating point. Three details cost more
+effort than the change. First, the existing damping was a uniform ridge
+$\lambda\,\tr(A)/d\cdot I$, not Marquardt's $\lambda\operatorname{diag}(A)$; on a unit-diagonal
+matrix $\lambda I$ \emph{is} the latter, so scaling makes the damping per-coordinate as a side
+effect. Second, $\lambda$ becomes relative, so the previous absolute floor of $10^{-12}$ sits at
+the smallest eigenvalue of the scaled matrix and never stops perturbing the solve; machine epsilon
+is the meaningful floor. Third, and dominant, the \emph{initial} $\lambda$ matters: at $10^{-8}$
+HIV stalls at $1.5\times10^{-3}$, while at $10^{-10}$ or below it reaches $10^{-7}$, and the other
+three systems are indifferent across six orders. A diagonal floor set relative to the largest entry
+is tempting and wrong---HIV's legitimate curvature range spans $10^{16}$, so any relative floor
+large enough to act clips real curvature.
+
+\subsection{Convergence cannot be tested on the gradient norm}
+\label{sec:decrement}
+
+The same reasoning applies to stopping the iteration. $\|\nabla\log p\|$ carries the units of the
+log-density and of $\theta$, so no absolute tolerance transfers between problems, and its
+attainable floor is set by the working precision: in float32 it bottoms out near $10^{-2}$ on
+FitzHugh--Nagumo, where the default tolerance of $10^{-6}$ is unreachable by construction and the
+solver runs every iteration of its budget for nothing.
+
+The Newton decrement is the scale-free replacement and costs nothing, since $\delta = A^{-1}g$ is
+already formed at each step:
+\begin{equation}
+\label{eq:decrement}
+  \lambda_{\mathrm{N}} = \sqrt{g^\top A^{-1} g} = \sqrt{g^\top \delta}.
+\end{equation}
+To second order this is the remaining distance to the mode in posterior standard deviations, so a
+tolerance on it means the same thing on every problem and in every precision. A tolerance of
+$10^{-3}$---locate the mode to a thousandth of a standard deviation---terminates every case in the
+suite in $6$ to $35$ iterations where an absolute tolerance ran to the cap:
+
+\begin{center}\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+& \multicolumn{2}{c}{fn} & \multicolumn{2}{c}{hes1} & \multicolumn{2}{c}{hiv} & \multicolumn{2}{c}{lorenz}\\
+& f64 & f32 & f64 & f32 & f64 & f32 & f64 & f32\\
+\midrule
+iterations & 20 & 22 & 14 & 14 & 6 & 9 & 35 & 31\\
+$\lambda_{\mathrm{N}}$ & 1.1e-3 & 5.6e-3 & 4.5e-9 & 4.2e-6 & 1.2e-5 & $\infty$ & 4.7e-4 & 1.6e-3\\
+$\|\nabla\log p\|$ & 2.7e-3 & 1.5e-2 & 3.9e-9 & 7.9e-6 & 1.9e-3 & 2.1e0 & 2.1e-4 & 8.9e-4\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A scale-free tolerance still has a precision floor, so the iteration also stops on stagnation;
+otherwise float32 spends its remaining budget whenever the requested tolerance happens to sit
+below what the format can deliver. The entry $\lambda_{\mathrm{N}} = \infty$ for HIV in float32 is
+not a failure to converge---the mode it returns matches the float64 one to three decimals in
+$\log p$---but a refusal to certify: at $\kappa(A) = 4\times10^{17}$ in single precision the
+decrement cannot be computed reliably, and reporting that is more useful than reporting a number.
+
+\begin{remark}[A recurring theme]
+This is the fourth place in this paper where a quantity with units was being compared against an
+absolute threshold, after the conditioning of the normal equations (Section~\ref{sec:solver}), the
+detection of flat directions (Section~\ref{sec:diagnosis}) and the finite-difference step
+(Section~\ref{sec:stencil}). In each case the fix is to divide by the relevant scale---the diagonal
+of $A$, the diagonal of $H$, the posterior standard deviation---and in each case the unscaled
+version worked on the benchmark it was developed on and failed elsewhere.
+\end{remark}
+
+\section{The missing prior}
+\label{sec:prior}
+
+MAGI's posterior, as derived in \cite{yang2021}, is
+\[
+  p(\theta, x(I)\mid\cdot) \;\propto\; \pi_\Theta(\theta)\,
+  \exp\Big\{-\tfrac12\textstyle\sum_d\big[\text{GP} + \text{observation} + \text{ODE}\big]\Big\},
+\]
+with ``a general prior distribution $\pi(\cdot)$ on $\theta$''. The implementation omits
+$\pi_\Theta$: its \code{theta\_conf} argument reaches only the initialiser, where it pulls the
+starting point toward a guess, and never enters the log-density. Every posterior therefore carries
+a flat improper prior on every parameter.
+
+By \eqref{eq:residual} a Gaussian prior is one more residual block, so restoring it preserves the
+least-squares structure, contributes a constant to $J^\top J$, adds no second-derivative term, and
+lifts the $\theta$ block away from singularity. We take the root from an eigendecomposition rather
+than a Cholesky because $P$ is permitted to be singular, $P=0$ recovering the previous behaviour
+bit for bit.
+
+\subsection{What we thought it fixed}
+
+We originally reported a striking demonstration here. Under the flat prior HIV's posterior was
+improper in $\lambda$---the profiled log-density fell by $0.07$ nats while $\lambda$ moved from
+$-11.9$ to $99{,}988$---the Hessian carried an exact null direction, importance sampling collapsed
+to an effective sample size of one, and the parameters that \emph{were} well determined, $\delta$
+and $N$, sat at $0.259$ and $1788$ against a truth of $0.5$ and $1000$ with posterior standard
+deviations under $2\%$ of their values. Supplying a proper prior removed the null direction, made
+the posterior proper, restored the effective sample size fourteenfold and moved $\delta$ and $N$ to
+$0.481$ and $962$. A control with the prior centred at half the true values still recovered $0.470$
+and $940$, so the prior was not supplying the answer.
+
+All of that was measuring the hyperparameter fit of Section~\ref{sec:gp}. With $\phi$ fitted on a
+scale-free footing, HIV's posterior is proper under a flat prior, has no null direction, and places
+$\lambda$ at $36.3$ against a truth of $36$. The demonstration is void.
+
+What survives is narrower but still worth stating. The implementation omits a term its own
+derivation contains, and that is a discrepancy independent of any benchmark: wherever a parameter
+genuinely is unidentified, a flat prior leaves the posterior improper, and the machinery for
+supplying $\pi_\Theta$ costs one residual block and preserves the least-squares structure exactly.
+The mechanism we described---that in a partially identified model the estimates of the identified
+parameters are set by wherever the unidentified ones come to rest---remains sound as an argument,
+but we no longer have an example of it on this suite, because the suite turns out to be identified.
+
+\begin{remark}
+The episode is worth keeping in view when reading the rest of this paper. Every diagnostic we had
+built reported the situation correctly given the model it was handed; what none of them could do
+was question the model. The observation that broke it open was not a diagnostic at all but a plot
+of the fitted trajectories.
+\end{remark}
+
+\section{The hyperparameters the inference never sees}
+\label{sec:gp}
+
+MAGI fits the GP hyperparameters $\phi = (\phi_1, \phi_2)$ once, before any inference, by
+maximising a marginal likelihood per state component. Nothing downstream revisits them, and
+nothing in the posterior machinery can compensate for them. They turn out to dominate everything
+else in this paper.
+
+\subsection{The symptom}
+
+The posterior trajectories are wrong on three of the four systems, and not in a way the parameter
+diagnostics detect. On HIV's $T_U$, whose observation noise is $\sigma = 3.16$ and whose true range
+is $168$ to $600$:
+
+\begin{center}\small
+\begin{tabular}{lr}
+\toprule
+ & rms$/\sigma$\\
+\midrule
+MAP against the data, at observed points & $0.007$\\
+MAP against the truth, at observed points & $1.06$\\
+MAP against the truth, at \textbf{unobserved} points & $\mathbf{74.5}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The trajectory passes exactly through every observation and falls to $9.5\times10^{-8}$ between
+them. Observations occupy every second grid point, so the interleaved points are held by the GP
+prior alone---and the fitted lengthscale is $1.05\times10^{-4}$ against a grid spacing of $0.1$.
+The fitted posterior is not at fault: its trajectory bands match the reference chain to within a
+few percent on every system. The mode is.
+
+\subsection{The cause, and a scale-free fit}
+
+The hyperparameters are optimised in $\log\phi$ by BFGS from $x_0 = 0$, that is from
+$\phi_1 = \phi_2 = \sigma = 1$ whatever the units of the data. HIV's $T_U$ has marginal variance
+$5.6\times10^4$, so the start is five orders out, and BFGS---whose step sizes and convergence
+tolerances are absolute in its own variables---settles on a lengthscale that explains the
+observations as white noise.
+
+The repair is the same one as everywhere else in this paper: optimise
+$\phi = s \odot e^{u}$ from $u = 0$, with $s$ the data's own marginal variance and the FFT
+lengthscale estimate the code already computes. A unit step is then a factor of $e$ regardless of
+units.
+
+That alone is not enough, because the constraint is two-sided. A scale-free start pushes HIV's
+$T_I$ lengthscale to $20.56$, the entire time span, at which $K^{-1}$ becomes \emph{indefinite}
+(eigenvalues $-24$ to $+11$) and its Cholesky in the solver is NaN: the Matern derivative kernel
+degenerates as the lengthscale approaches the span, just as it stops constraining anything when
+the lengthscale falls below the grid. The fit is confined to $[2\,\delta t,\ \mathrm{span}/4]$,
+both ends being properties of the discretisation rather than of the data.
+
+Trajectory quality is governed entirely by the resulting ratio $\ell/\delta t$
+(Table~\ref{tab:gp}), and $\mathtt{diagnose()}$ now reports it, because no other diagnostic can
+see it.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{before} & \multicolumn{2}{c}{after}\\
+system & $\ell/\delta t$ & trajectory error & $\ell/\delta t$ & trajectory error\\
+\midrule
+fn     & 13, 12 & 3.5\%, 7.2\% & 13, 12 & 3.5\%, \textbf{2.6\%}\\
+lorenz & 12, 9.1, 1.1 & 22.9\%, 25.3\%, 14.2\% & 12, 9.1, 17 & \textbf{8.3\%, 11.8\%, 5.3\%}\\
+hes1   & 0.14, 0.15, 0.16 & 71.6\%, 73.2\%, 100.8\% & 8.0, 6.3, 3.9 & \textbf{5.8\%, 13.8\%, 30.0\%}\\
+hiv    & 0.001, 0.011, 12 & 69.5\%, 6.4\%, 0.3\% & 50, 50, 8.7 & \textbf{0.4\%, 0.9\%, 0.1\%}\\
+\bottomrule
+\end{tabular}
+\caption{Relative error of the fitted state trajectory against the truth, before and after the
+hyperparameter fit is made scale free. Wherever the lengthscale exceeds a few grid spacings the
+trajectory is recovered; wherever it falls below one, the states between observations are held by
+nothing.}
+\label{tab:gp}
+\end{table}
+
+\subsection{What this invalidates}
+
+The consequences reach most of the quantitative claims we had made about these benchmarks. With
+the hyperparameters fitted properly, \textbf{every system recovers its true parameters to within
+$1.6$ posterior standard deviations}, and the only parameters still weakly determined anywhere are
+three of Hes1's seven---HIV's $\lambda$ is $36.3$
+against a truth of $36$ where it had been $-11.9$, and Hes1's seven parameters, which had collapsed
+to $\sim\!10^{-6}$, are all within $1.4$ standard deviations of their true values. HIV's condition
+number falls from $4\times10^{17}$ to $4\times10^{2}$ and its null direction disappears, so its
+posterior is proper and a reference chain for it exists.
+
+We record this rather than quietly rewriting, because the failure mode is the instructive part. The
+bug sat upstream of everything under study; it produced posteriors that looked entirely plausible;
+and the diagnostics of Section~\ref{sec:diagnosis}---mode validity, identifiability, properness---
+reported it faithfully, as a property of the model. What exposed it was plotting the trajectories,
+which none of those diagnostics examined.
+
+\section{Diagnosis before inference}
+\label{sec:diagnosis}
+
+A fast mode makes a set of questions affordable that are usually assumed away. All of the following
+requires no sampler and costs, on these four systems, between ten seconds and a minute and a half
+--- most of it in the eight Hessian factorizations of the conditioning check below, which dominates
+on HIV at $d=608$ and can be dropped by setting \texttt{n\_curv=0} when only identifiability is
+wanted.
+
+\paragraph{Is it a mode?} The exact Hessian's spectrum, and, if a genuinely negative direction
+exists, a step along it followed by a re-solve. On all four systems there is none. Proximity to the
+mode is reported as $\sqrt{g^\top H^{-1} g}$ rather than $\|\nabla\log p\|$, for the reason in
+Section~\ref{sec:decrement}: on FitzHugh--Nagumo in float32 the raw norm is $1.7\times10^{-2}$,
+which fails any tolerance carried over from double precision, while the scale-free measure is
+$5.6\times10^{-3}$---the mode is located to within $0.6\%$ of a posterior standard deviation, and
+nothing downstream is affected.
+
+\paragraph{Is it the only one?} Re-solving from dispersed starts, and separately by continuation in
+the prior tempering $\beta^{-1}$: at small $\beta^{-1}$ the objective is dominated by the
+observation term and has a benign landscape, and following the solution up to the target keeps the
+iterate in that basin. Two solves count as having found the same optimum when the POINTS agree, in
+the Hessian metric, and not when their log-densities agree to some number of decimals---in float32
+the mode is located only to a few thousandths of a standard deviation, so $\log p$ between two
+solves of the same optimum differs by far more than any tight absolute tolerance, and comparing it
+reports every restart as a new optimum. On this criterion FitzHugh--Nagumo, Hes1 and HIV each
+return a single optimum over five solves. Lorenz returns three, none of them better than the mode,
+which is the expected signature of a chaotic objective with shallow secondary basins; the check
+passes on the grounds that the mode found is still the best one, and the count is reported so that
+the distinction is visible rather than hidden behind the verdict.
+
+\paragraph{Which parameters are identified?} Eigenvalues of the raw Hessian have units, and reading
+flatness off them is the same scale error that Section~\ref{sec:solver} is about. We use the
+spectrum of $DHD$ and the marginal posterior standard deviation of each parameter as a fraction of
+its own value.
+
+\paragraph{Will it be hard to sample?} The Laplace metric whitens the target exactly \emph{at} the
+mode, so what matters is how far it departs a standard deviation away. Writing $M = L^\top H(x) L$
+for $L$ the mode's whitening, $\operatorname{cond}(M)$ measured over a handful of Laplace draws
+predicts the reference chain's behaviour before any chain is run
+(Table~\ref{tab:condm}), and costs about eight Hessian evaluations. It is not visible in the
+condition number at the mode: on Hes1 the latter is $1.5\times10^5$ while
+$\operatorname{cond}(M)$ reaches $10^6$.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+system & $\operatorname{cond}(M)$, Laplace draws & reference draws & reference $\Rhat$ & divergences\\
+\midrule
+hiv    & \textbf{1.21} & 1.30 & \textbf{1.0001} & \textbf{0\%}\\
+lorenz & $1.9\times10^{2}$ & $2.2\times10^{3}$ & 1.0072 & 1.1\%\\
+fn     & $3.8\times10^{2}$ & $1.7\times10^{3}$ & 1.0064 & 1.4\%\\
+hes1   & $\mathbf{1.1\times10^{6}}$ & $7.1\times10^{6}$ & \textbf{1.76} & \textbf{13\%}\\
+\bottomrule
+\end{tabular}
+\caption{Variation of the curvature over the posterior, and the reference chain that resulted.
+Laplace draws reproduce the ordering obtained from reference draws, so the difficulty is knowable
+in advance.}
+\label{tab:condm}
+\end{table}
+
+\paragraph{Is the posterior proper?} A null direction of the quadratic model is not an improper
+posterior; the density may still decay at higher order. We walk each parameter axis outward with
+the states re-profiled at every step, so the walk follows the ridge rather than cutting across it,
+and record the fall in $\log\hat p$. The walk is repeated at several radii and the fall reported at
+the furthest one that resolved, since a probe whose inner solve fails also returns $-\infty$ and
+would otherwise be indistinguishable from a density that has genuinely decayed. With the
+hyperparameters fitted correctly every parameter of every system is proper, and on three of the
+four the probe stops resolving before the density measurably decays---so the test now confirms
+properness without measuring how strongly, which is weaker than it looks and worth remembering if
+it is relied on.
+
+Each check is reported with the threshold it must meet and a pass or fail, alongside an overall
+status, so that ``the method declined'' and ``the posterior does not exist'' are not left for the
+reader to disentangle. Hes1 is the case where the two reports disagree, and they disagree in the
+direction that matters: the \emph{diagnosis} fails, on curvature variation alone---a unique
+maximum, no negative curvature, every parameter proper, but $\operatorname{cond}(M) = 1.1\times
+10^{6}$---while the \emph{fit} passes its gate, at $\mathrm{ESS} = 21\%$ and $\khat = -0.06$. Both
+are right. The profiled integral never sees the funnel, because the states are profiled out and
+only seven dimensions are sampled; the reference chain has to traverse it, and cannot. The
+practical consequence is uncomfortable and worth stating plainly: on Hes1 we have an estimate that
+certifies itself and no way to check it, because the thing we would check it against is the thing
+the diagnosis says is infeasible.
+
+One gap in the gate is visible here. On Hes1 $93$ of the $512$ inner profile solves fail outright,
+and the gate does not look at that count---it reads the importance weights, which are computed from
+the $419$ nodes that succeeded. A high failure rate is not the same as a bad weight distribution
+and should probably be gated separately; we report it in the diagnostics but do not currently act
+on it.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrl}
+\toprule
+system & parameter & $\mathrm{sd}/|\hat\theta|$ & verdict\\
+\midrule
+fn     & $a, b, c$ & 0.13, 0.38, 0.02 & identified\\
+hiv    & $\lambda, \rho, \delta, N, c$ & 0.04, 0.06, 0.02, 0.02, 0.01 & identified\\
+lorenz & $\beta, \rho, \sigma$ & 0.06, 0.03, 0.12 & identified\\
+hes1   & $b, c, d, e$ & 0.11 -- 0.26 & identified\\
+hes1   & $a, f, g$ & 0.50, 0.56, 0.53 & weak\\
+\bottomrule
+\end{tabular}
+\caption{Identifiability after the hyperparameter fit of Section~\ref{sec:gp}, in five to twelve
+seconds per system without sampling. Every system recovers its true parameters to within $1.6$
+posterior standard deviations. Before the fix this table read very differently---HIV's $\lambda$
+improper, all seven of Hes1's parameters diffuse---and none of that was a property of the models.}
+\label{tab:diag}
+\end{table}
+
+\section{The profiled posterior}
+\label{sec:profiled}
+
+\subsection{Construction}
+
+Do not approximate the states. Integrate them:
+\begin{equation}
+\label{eq:profile}
+  p(\theta) = \int e^{-U(\theta,X)}\,dX
+  \;\approx\; e^{-U(\theta, X^\star(\theta))}\,
+  \det H_{XX}\big(\theta, X^\star(\theta)\big)^{-1/2},
+  \qquad X^\star(\theta) = \arg\min_X U(\theta, X),
+\end{equation}
+the Laplace approximation applied to the \emph{inner} integral only. The remaining
+$p$-dimensional integral is done by self-normalised importance sampling on a scrambled Sobol set,
+so the result is deterministic given a seed and comes with an effective sample size and a Pareto
+$\khat$ as reference-free diagnostics.
+
+This differs from a Gaussian at the joint mode in three ways that matter. It is exact under
+Condition~\ref{cond:A} below, where the joint version still carries a first-order mean error,
+because the joint version linearises the $\theta$--$X$ coupling and this one does not. What remains
+is the non-Gaussianity of $p(X\mid\theta)$ alone, which the GP prior and the data constrain far
+more tightly than they constrain $\theta$. And nothing Gaussian is assumed about $\theta$: skew and
+curvature in the parameter marginals survive.
+
+The output is not a Gaussian but a mixture, one Gaussian in the states per parameter node,
+\[
+  p(x) \;\approx\; \sum_i w_i\, \delta(\theta - \theta_i)\,
+  \mathcal N\!\big(X;\, X^\star(\theta_i),\, H_{XX}(\theta_i)^{-1}\big),
+\]
+from which every moment follows in closed form, including $\operatorname{Cov}(\theta, X)$, which no
+Gaussian centred at the mode gets right.
+
+\begin{condition}[Affine in the state]
+\label{cond:A}
+$f(\cdot,\theta)$ is affine in $X$ for every $\theta$.
+\end{condition}
+
+\begin{proposition}
+Under Condition~\ref{cond:A} the residual \eqref{eq:residual} is affine in $X$ at fixed $\theta$,
+so $U(\theta, X)$ is exactly quadratic in $X$, $p(X\mid\theta)$ is exactly Gaussian, and
+\eqref{eq:profile} holds with equality. The $d$-dimensional problem is then exactly a
+$p$-dimensional one.
+\end{proposition}
+
+Condition~\ref{cond:A} is much weaker than requiring $f$ affine in $(X,\theta)$ jointly---$\theta$
+may still multiply states---and covers linear compartment models, linear pharmacokinetics and every
+constant-coefficient system. It is testable in two Hessian evaluations by checking whether $H_{XX}$
+depends on $X$ \cite{companion}.
+
+\subsection{The proposal, and a structural limit}
+
+Drawing $\theta$ from the joint Laplace marginal $\mathcal N(\hat\theta, (H^{-1})_{\theta\theta})$
+is the obvious choice and a poor one: that object accounts for the $\theta$--$X$ coupling only to
+first order, and on Hes1 the log importance weights then span $8{,}400$ nats with
+$\mathrm{ESS} = 0.6\%$. Since $p$ is small, the profiled marginal's own mode and curvature are
+directly computable---a Newton solve in $p$ dimensions by central differences through
+\eqref{eq:profile}, costing $O(p^2)$ profile solves per step.
+
+This is worth doing for the mode. The profiled mode is \emph{not} the joint mode's $\theta$: on
+FitzHugh--Nagumo it sits $(-0.24, +1.01, -1.09)$ Laplace standard deviations away, precisely the
+directions and magnitudes by which the joint mode is known to be biased. The joint mode maximises
+$U(\theta, X)$; the profiled mode maximises $U(\theta, X^\star(\theta)) + \tfrac12\log\det
+H_{XX}(\theta)$, and that determinant---the volume of state space consistent with $\theta$---is
+what the joint mode ignores.
+
+It is \emph{not} worth doing for the curvature, for a structural reason. The second derivative of
+$-U(\theta, X^\star(\theta))$ at the mode is exactly the Schur complement
+$(\Sigma_{\theta\theta})^{-1}$, and the determinant term's curvature is negligible: measured on
+Hes1 at three stencil sizes spanning two orders of magnitude, the profile curvature equals the
+joint Laplace curvature to four decimals. Profiling buys nothing near the mode; everything it gains
+is in the shape away from it.
+
+\subsection{A warm start from the implicit function theorem}
+
+$X^\star(\theta)$ satisfies $\nabla_X U(\theta, X^\star) = 0$, so
+$H_{XX}\,dX^\star/d\theta + H_{X\theta} = 0$ and the sensitivity is one solve against a
+factorisation already in hand. Starting each node from
+$X_{\mathrm{MAP}} + (dX^\star/d\theta)(\theta - \theta_{\mathrm{MAP}})$ rather than from
+$X_{\mathrm{MAP}}$ lets the inner iteration count fall from six to two at unchanged accuracy
+(Table~\ref{tab:predictor}).
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+inner iterations & 2 & 4 & 8\\
+\midrule
+from $X_{\mathrm{MAP}}$ & 0.0437 / 5.8\,s & 0.0065 / 6.8\,s & 0.0056 / 8.7\,s\\
+\textbf{from the predictor} & \textbf{0.0059 / 4.5\,s} & 0.0063 / 6.1\,s & 0.0065 / 9.1\,s\\
+\bottomrule
+\end{tabular}
+\caption{Largest parameter error in reference standard deviations, and wall clock, on
+FitzHugh--Nagumo. The chain-to-chain floor is $0.0120$.}
+\label{tab:predictor}
+\end{table}
+
+\subsection{Choosing the finite-difference step}
+\label{sec:stencil}
+
+The Newton step of the previous subsection differentiates \eqref{eq:profile} by central
+differences, and the step size $h$ is not a free parameter to be set once. A central second
+difference carries truncation error growing like $h^2$ times the fourth derivative and round-off
+error falling like $\sigma/h^2$, so $h$ is bounded on both sides, and \emph{both bounds are
+properties of the problem}: $\sigma$ comes from the working precision, the fourth derivative from
+how non-Gaussian the profiled marginal is. Table~\ref{tab:stencil} shows the two bounds measured
+across the suite, in units of the joint Laplace standard deviation.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrrrrrr}
+\toprule
+& $h/\mathrm{sd}$ & 0.05 & 0.2 & 0.8 & 1.6 & 3.2 & 6.4 & 12.8\\
+\midrule
+fn, float64 & $\theta_1$ & 1.145 & 1.145 & 1.150 & 1.163 & 1.217 & 1.425 & ---\\
+fn, float32 & $\theta_1$ & \textbf{0.439} & 1.147 & 1.146 & 1.162 & 1.217 & 1.425 & ---\\
+hes1, both  & $\theta_5$ & 169.4 & 129.0 & \textbf{34.5} & 13.0 & 4.0 & 1.3 & ---\\
+lorenz, both& $\theta_2$ & 0.505 & 0.504 & 0.482 & \textbf{---} & --- & --- & ---\\
+\bottomrule
+\end{tabular}
+\caption{Diagonal curvature of the profiled log-density, scaled so a Gaussian profile would read
+$1.0$ at every $h$. Three different failure modes bound the step: round-off at small $h$ in single
+precision (fn), truncation at large $h$ where the profile is non-quadratic (hes1), and outright
+failure of the inner solve (lorenz). The usable windows do not overlap---fn in float32 needs
+$h \gtrsim 0.2$ while hes1 needs $h \lesssim 0.05$---so no constant serves both.}
+\label{tab:stencil}
+\end{table}
+
+Since a plateau is precisely a range over which the estimate does not move, we locate it: evaluate
+the diagonal curvature along a ladder, take the longest \emph{contiguous run of rungs that all
+agree with one another} to within a tolerance, and use the geometric middle of that run. Three
+details are each necessary, and we record them because the obvious version of the rule fails on
+this suite in three different ways.
+
+\emph{Agreement must be across the run, not between neighbours.} On FitzHugh--Nagumo every
+consecutive change stays under $5\%$ from $h = 0.05$ out to $3.2$ while the curvature drifts from
+$1.145$ to $1.217$; small steps accumulate, and a neighbour test walks steadily off the plateau it
+is meant to find.
+
+\emph{The middle of the run, not the top.} The ends of the run are exactly where the estimate
+begins to fail, and both bounds are multiplicative, so the geometric middle maximises the margin
+on either side. Taking the top is measurably worse: the run is located from diagonal probes while
+the Newton also needs off-diagonal ones at $\sqrt2$ times the displacement, and on Lorenz the top
+of the run made those non-finite and cost three quarters of the effective sample size.
+
+\emph{A failed probe is not agreement.} Judging coherence on whichever parameters happen to be
+finite silently drops those that failed. On Lorenz the third parameter stops resolving beyond
+$h = 0.8$, and ignoring that extended the apparent plateau to $3.2$---the same collapse again, by a
+different route. A rung counts only if every parameter resolved on it.
+
+The cost is $2p$ evaluations per rung, negligible beside the node budget. The selected steps differ
+by more than an order of magnitude across the suite (Table~\ref{tab:chosen}), which is the case for
+selecting rather than setting them.
+
+\subsection{A gate}
+
+Importance sampling at a few percent effective sample size is not an estimate. We require
+$\mathrm{ESS} \ge 10\%$ and $\khat < 0.7$, both computable without a reference, and otherwise
+report the Laplace approximation. This is not a formality: on Hes1, where no parameter is
+identified, the mode's parameter error is $0.0126$ against a floor of $0.0181$---the mode is
+already at the reference mean---while the profiled estimate is substantially worse. Where nothing
+is identified the Laplace approximation is the correct answer and the method must say so.
+
+\begin{algorithm}[t]
+\DontPrintSemicolon
+\SetAlgoLined
+\KwIn{MAGI model; nodes $N=512$; inner iterations $3$; gate $(\mathrm{ESS}\ge10\%,\ \khat<0.7)$}
+\KwOut{profiled mixture, or Laplace fallback, with diagnostics}
+$\xmap \leftarrow$ Jacobi-scaled Gauss--Newton on $\|R\|^2$ \tcp*[r]{$\approx 1$\,s}
+$H \leftarrow J^\top J + \sum_a R_a\nabla^2R_a$; Jacobi-stabilised $\Sigma \leftarrow H^{-1}$\;
+$dX^\star/d\theta \leftarrow -H_{XX}^{-1}H_{X\theta}$ \tcp*[r]{implicit function theorem}
+$h \leftarrow$ geometric middle of the curvature plateau \tcp*[r]{Sec.~\ref{sec:stencil}}
+$\hat\theta, H_{\mathrm{prof}} \leftarrow$ Newton on $\log\hat p(\theta)$, central differences at $h$\;
+$\theta_i \leftarrow \hat\theta + L z_i$, $z_i$ scrambled Sobol, $LL^\top = H_{\mathrm{prof}}^{-1}$\;
+\ForEach{$\theta_i$ \rm{(batched)}}{
+  $X \leftarrow X_{\mathrm{MAP}} + (dX^\star/d\theta)(\theta_i - \theta_{\mathrm{MAP}})$\;
+  three Gauss--Newton steps on $X$ at fixed $\theta_i$\;
+  $\log\hat p_i \leftarrow -U(\theta_i, X) - \tfrac12\log\det H_{XX}$\;
+}
+$w \propto \exp(\log\hat p_i - \log q_i)$; compute ESS and $\khat$\;
+\Return{mixture if the gate passes, else $\mathcal N(\xmap, \Sigma)$}
+\caption{Profiled MAGI posterior, $\approx 5$\,s at $d=325$}
+\label{alg:profiled}
+\end{algorithm}
+
+\section{Benchmarks}
+\label{sec:bench}
+
+\subsection{Systems, and a note on constructing them}
+
+Four systems: \textbf{FitzHugh--Nagumo} ($d=325$, $p=3$), \textbf{Hes1} ($d=106$, $p=7$, a
+rational nonlinearity, $\exp(X)$ states and a component never observed), \textbf{HIV} ($d=608$,
+$p=5$, time-dependent forcing, states spanning $30$ to $10^5$) and \textbf{Lorenz} ($d=306$,
+$p=3$, chaotic).
+
+The suite originally integrated with forward Euler, retaining every substep. Both choices bound
+what could be measured. Storage is $(t_{\max}/h)\,D$, which at $h=10^{-6}$ is $5.8$\,GB for Hes1's
+horizon of $240$; and on HIV the integration error at the observation times was $2.6$ observation
+standard deviations, larger than the noise it was competing with, so the posterior under study was
+not the intended one. Replacing Euler with RK4 and retaining only the output grid changes both:
+
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{2}{c}{error / $\sigma$} & \multicolumn{2}{c}{$f$ evaluations}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+system & Euler $10^{-6}$ & \textbf{RK4 $10^{-3}$} & Euler $10^{-6}$ & \textbf{RK4 $10^{-3}$}\\
+\midrule
+fn     & 6.8e-05 & \textbf{6.8e-11} & 20{,}000{,}000 & \textbf{80{,}000}\\
+hes1   & 2.2e-06 & \textbf{7.5e-12} & 240{,}000{,}000 & \textbf{960{,}000}\\
+hiv    & 5.0e-03 & \textbf{5.2e-09} & 20{,}000{,}200 & \textbf{80{,}800}\\
+lorenz & 1.7e-04 & \textbf{1.1e-08} & 2{,}500{,}100 & \textbf{10{,}400}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Six orders of accuracy for two to three fewer of work, with storage independent of the step: $1$ to
+$5$\,kB rather than gigabytes. Hes1's integration falls from $10.0$\,s to $0.14$\,s. We record this
+because a benchmark whose synthetic ``truth'' carries more error than its own noise cannot
+discriminate between posterior approximations, and the defect is invisible unless looked for.
+
+\subsection{References}
+
+References are $32$ chains of $3{,}000$ draws of NUTS \cite{hoffman2014} via BlackJAX,
+preconditioned by the exact Hessian in Jacobi-scaled coordinates, which affects only efficiency and
+never the stationary distribution. Rebuilt after the hyperparameter fit, HIV gives
+$\Rhat = 1.0001$ with \emph{zero} divergences---it had previously failed to converge at all---
+FitzHugh--Nagumo $1.0064$ with $1.4\%$ and Lorenz $1.0072$ with $1.1\%$. Hes1 gives
+$\Rhat = 1.76$ with $13\%$ divergences and $2.79$ million leapfrog steps per chain, and is not
+usable; it was marginally usable \emph{before} the fix, for reasons Section~\ref{sec:funnel}
+sets out.
+
+\subsection{Results}
+\label{sec:results}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrr}
+\toprule
+system & estimate & max $|\theta$ error$|$ & max $|$sd error$|$ & s\\
+\midrule
+fn & mode                    & 1.0286 & 2.18\% & ---\\
+   & \textbf{profiled}       & \textbf{0.0126} & \textbf{0.45\%} & 6.7\\
+   & reference half-vs-half  & 0.0100 & 0.86\% & \\
+\midrule
+hiv & mode                   & 0.1485 & 0.62\% & ---\\
+   & \textbf{profiled}       & \textbf{0.0093} & \textbf{0.34\%} & 23.2\\
+   & reference half-vs-half  & 0.0081 & 0.77\% & \\
+\midrule
+lorenz & mode                & 1.8026 & 39.68\% & ---\\
+   & \textbf{profiled}       & \textbf{0.0119} & \textbf{1.27\%} & 5.2\\
+   & reference half-vs-half  & 0.0405 & 1.19\% & \\
+\midrule
+hes1$^\dagger$ & mode        & 2.8639 & 189.6\% & ---\\
+   & profiled                & 0.2163 & 50.5\% & 3.2\\
+   & reference half-vs-half  & 0.0841 & 10.9\% & \\
+\bottomrule
+\end{tabular}
+\caption{Parameter errors in reference standard deviations, after the hyperparameter fit of
+Section~\ref{sec:gp}. On FitzHugh--Nagumo, HIV and Lorenz the profiled posterior is at or
+\emph{below} the level at which two independent halves of the reference agree with each other.
+Lorenz in particular moves from $0.34$ before the fix---which we had attributed to chaotic dynamics
+defeating the inner Laplace approximation---to $0.0119$, so that explanation was wrong.
+$^\dagger$Hes1's reference has $\Rhat = 1.76$ and $13\%$ divergences and is not usable; its row is
+shown for completeness only.}
+\label{tab:results}
+\end{table}
+
+Table~\ref{tab:results} is the main result. On all three systems with a usable reference the
+profiled posterior sits at or below the level at which two independent halves of that reference
+agree with each other, which is the most that can be claimed from a finite chain: $0.0126$ against
+a floor of $0.0100$ on FitzHugh--Nagumo, $0.0093$ against $0.0081$ on HIV, and $0.0119$ against
+$0.0405$ on Lorenz, the last comfortably \emph{below} it. Against the mode the improvement is $82$,
+$16$ and $151$ times on location, and the spread errors fall to a fraction of a percent on the
+first two. The costs in the last column---between three and twenty-three seconds---are against
+reference chains of roughly two hundred seconds and up.
+
+Lorenz deserves a note, because we previously drew a conclusion from it that was wrong. Before the
+hyperparameter fit its profiled error was $0.34$ against a floor of $4.14$, and we attributed the
+gap to chaotic dynamics making $p(X\mid\theta)$ strongly non-Gaussian and so undermining the inner
+Laplace approximation \eqref{eq:profile}. That was a plausible mechanism and it was not the one
+operating: with $\phi$ fitted properly the error is $0.0119$, below the floor, and the chaos costs
+nothing measurable. Whether \eqref{eq:profile} degrades on genuinely chaotic problems remains open;
+this suite no longer speaks to it.
+
+Hes1's row is shown for completeness and should not be read as a result. Its gate passes
+($\mathrm{ESS} = 21\%$), but its reference does not converge, so $0.2163$ is a comparison against a
+chain that has not found the posterior rather than a measurement of error. Section~\ref{sec:funnel}
+takes up why.
+
+\subsection{Precision, and what the stencil was hiding}
+
+The profiled estimate appeared at first to require double precision: in single precision its
+effective sample size on FitzHugh--Nagumo fell from $75.7\%$ to $2.4\%$ and the gate replaced it
+with the very approximation it was meant to improve on. That diagnosis was wrong, and the way it
+was wrong is worth recording.
+
+The importance weights are barely affected by working precision. Measuring the float32 error in
+$\log\hat p$ across profile nodes---and only its \emph{spread} matters, since a constant offset
+cancels in self-normalisation---gives $0.007$ nats on CPU and $0.052$ on GPU, which degrade the
+effective sample size by a factor of $0.997$. Guarding the one unguarded matrix--matrix product in
+the exact-Hessian assembly, which runs in TF32 by default on tensor-core hardware, improves the
+log-determinant's error spread by a factor of ten on GPU and changes the effective sample size not
+at all.
+
+What was actually failing was the finite-difference stencil. A central second difference divides by
+$h^2$, so at $h = 0.02\,\mathrm{sd}$ the $0.007$ nats of round-off become an amplification of
+roughly $2500$ and the curvature estimate is noise---on FitzHugh--Nagumo it comes out
+\emph{negative}. With the step chosen as in Section~\ref{sec:stencil} rather than fixed, single
+precision matches double everywhere and is consistently faster (Table~\ref{tab:chosen}).
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrrrr}
+\toprule
+system & \multicolumn{2}{c}{chosen $h/\mathrm{sd}$} & \multicolumn{2}{c}{plateau} & \multicolumn{2}{c}{ESS}\\
+& f64 & f32 & f64 & f32 & f64 & f32\\
+\midrule
+fn     & 0.1  & 0.8 & 0.01--1.6 & 0.4--1.6  & 75.7\% & 76.4\%\\
+hes1   & 0.02 & 0.02 & 0.01--0.05 & 0.01--0.05 & 0.4\% & 0.4\%\\
+hiv    & 0.1  & 0.4 & 0.01--1.6 & 0.1--1.6  & 2.6\% & 3.5\%\\
+lorenz & 0.1  & 0.4 & 0.01--0.8 & 0.2--0.8  & 75.5\% & 76.0\%\\
+\bottomrule
+\end{tabular}
+\caption{Steps selected automatically, and the plateaus they were selected from. The lower edge
+moves with precision (fn: $0.01$ in double, $0.4$ in single) because round-off sets it; the upper
+edge does not (hes1 at $0.05$, lorenz at $0.8$) because truncation and probe failure set it. The
+rule reads both without being told which regime it is in.}
+\label{tab:chosen}
+\end{table}
+
+We note in passing a fact visible only in these diagnostics: Lorenz's profiled curvature for
+$\sigma$ is half the Laplace value, and for $\rho$ four fifths, across the whole plateau. The
+Laplace covariance is materially wrong there in a way the curvature at the mode cannot reveal,
+which is the effect profiling exists to capture.
+
+\section{Negative results}
+\label{sec:negative}
+
+\emph{The third-order correction of \cite{companion} is superseded.} It helped on FitzHugh--Nagumo
+and harmed Lorenz ($4.14 \to 4.86$) and Hes1. Those figures predate the hyperparameter fit and so
+describe different posteriors; we did not re-measure them, because the profiled estimate is better
+than either under both.
+
+\emph{Correcting the inner Laplace approximation by sampling makes matters worse.} Writing the
+exact inner integral as $-U^\star - \tfrac12\log\det H_{XX} + \log \E_\xi[e^{-\Delta}]$ with
+$\xi \sim \mathcal N(0, H_{XX}^{-1})$, the omitted term can be estimated with antithetic pairs,
+which cancel $\Delta$'s cubic part exactly. It fails: $\Delta$ is a sum of quartic terms over $322$
+to $603$ coordinates, a handful of pairs cannot resolve its mean, and injecting that noise into
+$\log\hat p(\theta)$ corrupts the weights multiplicatively. FitzHugh--Nagumo goes from $0.0086$ to
+$0.3665$. That it reaches the reference floor with the correction \emph{off} is the useful part.
+
+\emph{Restricting the integration to an identifiable subspace did not rescue HIV}, when HIV still
+appeared to need rescuing. Profiling the apparently improper directions out rather than integrating
+them is well defined---the determinant becomes a pseudo-determinant over the complement---but the
+effective sample size stayed at $1.6\%$ and half the inner solves failed. We record it because the
+construction is sound and may be useful on a genuinely partially identified problem; the target it
+was built for turned out to be an artifact.
+
+\emph{Profiling buys nothing near the mode}, for the structural reason in
+Section~\ref{sec:profiled}.
+
+\emph{Two convergence tests that report success on failure.} Clamping the Newton decrement with
+$\max(g^\top\delta, 0)$, to guard against a negative value, converts a round-off failure into a
+reported convergence: on HIV in float32 the dot product comes out negative, the clamp returns
+zero, and the solver stops after one iteration at a point $246$ nats below the mode. A
+non-positive or non-finite decrement must be treated as \emph{not converged}. Separately, counting
+distinct optima by rounding $\log p$ reports every restart as a new optimum in single precision.
+Both produced confident, wrong answers rather than visible failures.
+
+\emph{A fixed finite-difference step is not safe}, and the three natural ways of choosing one
+adaptively each fail on this suite: a neighbour-agreement test walks off the plateau, the top of
+the plateau breaks the off-diagonal probes, and treating a failed probe as agreement extends the
+plateau past its real end. Section~\ref{sec:stencil} gives the measurements. We record these
+because the first two produced plausible-looking answers on three of the four systems and failed
+only on the fourth.
+
+\section{Limitations}
+
+The evidence is four systems from one benchmark suite, with usable references on three of them.
+The profiled posterior reaches the reference floor on all three, which is as much as a finite
+reference can establish and no more: it bounds the error by the chain's own Monte Carlo noise
+rather than measuring it. A sharper test would need either a longer reference or a problem with a
+known answer.
+
+We also no longer have a case in this suite where the inner Laplace approximation
+\eqref{eq:profile} visibly degrades. We thought Lorenz was one and it was not
+(Section~\ref{sec:results}); Condition~\ref{cond:A} remains the right diagnostic for it, and
+remains unrun against a case that fails.
+
+The gate's thresholds ($\mathrm{ESS} \ge 10\%$, $\khat < 0.7$) are conventional rather than
+calibrated here, and were correct on all four systems, which is weak evidence.
+
+Hes1's reference is unusable, so on one system of four our comparisons have no target;
+Section~\ref{sec:funnel} sets out why and what might be done about it.
+
+Finally, we argued that the choice of prior on unidentified parameters determines the estimates of
+the identified ones. The argument stands, but our evidence for it does not: the example was HIV,
+which is not in fact unidentified. Whether the effect matters in practice is therefore open, and
+would need a problem that is genuinely partially identified once its hyperparameters are fitted
+properly.
+
+\section{A funnel, and how one might sample it}
+\label{sec:funnel}
+
+Hes1 is the one system in the suite without a usable reference, and the reason is worth setting out
+because it is diagnosable and because the remedies are not the obvious ones.
+
+\subsection{What it is}
+
+Its local curvature varies by a factor of $35.7$ across its own posterior, against $1.01$ for HIV.
+Regressing $\log$ of the largest Hessian eigenvalue on the coordinates over reference draws
+identifies the drivers: the peak of the third state component, correlation $+0.933$, and the
+parameter $a$, correlation $-0.902$ with a slope of $-97.6$ per unit. Hes1's states are on a log
+scale, its field reading $P, M, H = \exp(X)$, and $a$ enters as $-aH$ and $-aP$. So a parameter
+multiplies an exponentiated state, and the state in question, $H$, is \emph{never observed}. That
+is a funnel in the textbook sense, and the coordinate that generates it carries no data.
+
+\subsection{Why it appeared only after the hyperparameter fix}
+
+Before the fix Hes1's parameters were unidentified and pinned near zero; with $a \approx 10^{-9}$
+the $aH$ coupling was inert, the posterior was flat, and NUTS wandered it comfortably to
+$\Rhat = 1.005$ while exploring a region that meant nothing. Afterwards $a$ is determined at
+$0.032$, the coupling is live, and the same sampler takes $2.79$ million leapfrog steps per chain
+and reaches $\Rhat = 1.76$. This is not a regression: the problem went from flat, easy and
+meaningless to concentrated, hard and correct.
+
+\subsection{No fixed metric can do it}
+
+The obstruction is not the conditioning at any one point but the mutual disagreement between
+Hessians at different points, since a mass matrix must whiten all of them at once:
+
+\begin{center}\small
+\begin{tabular}{lrrr}
+\toprule
+system & pairwise $\operatorname{cond}(H_i^{-1}H_j)$ & mode metric & averaged metric\\
+\midrule
+hiv    & 1.18 & 1.18 & 1.14\\
+fn     & $2.1\times10^{3}$ & $3.8\times10^{2}$ & 59\\
+lorenz & $9.5\times10^{10}$ & $1.1\times10^{2}$ & 46\\
+hes1   & $\mathbf{1.7\times10^{13}}$ & $3.7\times10^{5}$ & $\mathbf{5.2\times10^{11}}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+On Hes1 the averaged metric is six orders \emph{worse} than the mode's, so the cheap alternatives
+are ruled out without trying them. Lorenz is the instructive near-miss: its pairwise figure is also
+enormous, yet a good fixed metric still reduces it to $46$.
+
+\subsection{What we would try next}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+\item \textbf{Observe $H$.} The funnel is generated by a component with no data. If the
+  experiment admits any observation of it the geometry largely dissolves. This is a change to the
+  problem rather than to the method, and it is by some distance the cheapest item here; it is worth
+  establishing before building machinery.
+\item \textbf{Reparameterise to the profiled coordinates.} Sampling
+  $(\theta, y)$ with $X = X^\star(\theta) + L(\theta)y$ removes the $\theta$--$X$ coupling by
+  construction, and is exactly the decomposition Section~\ref{sec:profiled} already computes. The
+  obstacle is that HMC needs gradients through an argmin and a log-determinant; the implicit
+  function theorem supplies the first, and the second requires third derivatives of $U$, which the
+  structure of \eqref{eq:residual} makes available---$\nabla^2 R_a = \sqrt b (L_k^\top)_a\nabla^2f$,
+  so a third derivative is one more level on the user's vector field alone.
+\item \textbf{Riemannian HMC with a SoftAbs metric}, the standard answer to a position-dependent
+  geometry. It needs the same third derivatives and is slow per step, but it does not require the
+  profiled construction to be correct.
+\item \textbf{MCMC on the profiled parameter density.} With $p = 7$ a derivative-free sampler is
+  entirely practical and would settle whether the importance sampling of
+  Section~\ref{sec:profiled} is adequate. It is worth being clear about what this does not do: it
+  shares the inner Laplace approximation with the method under test, so it validates the
+  parameter-space integration and nothing else. It is not an independent reference.
+\end{enumerate}
+
+We note that the profiled posterior is structurally unaffected by this particular funnel, since it
+integrates the states out at each $\theta$ instead of traversing the joint geometry; on Hes1 it
+reports an effective sample size of $21\%$ and $\khat = -0.06$ where NUTS fails outright. That is
+suggestive rather than established---without a reference we cannot score the answer---but if it
+holds it is an argument for the method that has nothing to do with speed.
+
+\section{Conclusion}
+
+MAGI's posterior is mostly state and a little parameter, and the two deserve different treatment.
+Integrating the states out exactly at each parameter value, and doing the small remaining integral
+directly, reaches the accuracy of a long reference chain in seconds and reports whether it has.
+Getting there depended on four unglamorous corrections---scaling a linear solve, integrating a
+benchmark accurately, restoring a prior term the derivation always contained, and fitting the
+Gaussian process hyperparameters on a scale-free footing---each of which was invisible in the
+outputs until it was looked for. The last was the largest by some distance, and the most
+instructive: it did not make the method fail, it made it succeed at fitting the wrong posterior,
+and every certificate we had built agreed that the fit was good. What caught it was plotting the
+trajectories.
+
+A pattern runs through all of them. Five separate quantities in this pipeline were being compared
+against absolute thresholds while carrying units: the conditioning of the normal equations, the
+eigenvalues used to detect flat directions, the finite-difference step, the convergence test, and
+the agreement test between restarts. Each worked on the problem it was developed on and failed on
+another, and in every case the repair was the same---divide by the scale that the quantity is
+measured in, and the threshold becomes a statement about the posterior rather than about the
+units. It is a dull principle, and it accounted for more of the difficulty here than any of the
+approximation theory.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{yang2021} S.~Yang, S.~W.~K.~Wong, S.~C.~Kou.
+  Inference of dynamic systems from noisy and sparse data via manifold-constrained Gaussian
+  processes. \emph{PNAS} 118(15), 2021.
+\bibitem{companion} A fast, self-certifying Gaussian posterior for MAGI ODE parameter inference.
+  Companion technical report, 2026.
+\bibitem{tierney1986} L.~Tierney, J.~B.~Kadane.
+  Accurate approximations for posterior moments and marginal densities.
+  \emph{JASA} 81(393):82--86, 1986.
+\bibitem{hoffman2014} M.~D.~Hoffman, A.~Gelman.
+  The No-U-Turn sampler. \emph{JMLR} 15:1593--1623, 2014.
+\bibitem{vehtari2024} A.~Vehtari, D.~Simpson, A.~Gelman, Y.~Yao, J.~Gabry.
+  Pareto smoothed importance sampling. \emph{JMLR} 25:1--58, 2024.
+\bibitem{marquardt1963} D.~W.~Marquardt.
+  An algorithm for least-squares estimation of nonlinear parameters.
+  \emph{J.~SIAM} 11(2):431--441, 1963.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,35 @@
+                  target / variant     K   energy  e/floor   SteinR   whsd   band profile (soft -> stiff)         sec
+fn N(ref_mean, ref_cov) EXACT draws   400   0.0758     0.91   1.0001  0.999    1.007  0.997  0.992  1.007  0.998       0.0
+                 standard, 1000 it   400   7.4096    88.86   0.0195  0.091    0.097  0.000  0.000  0.000  0.000       4.3
+               reweighted, 1000 it   400   5.1114    61.30   0.2301  0.292    0.522  0.088  0.054  0.119  0.367       4.9
+                   matrix, 1000 it   400   7.3667    88.35   0.0199  0.093    0.098  0.000  0.000  0.001  0.001       5.1
+   fn isotropic N(0,I) EXACT draws   400   0.0758     0.91   1.0001  0.999    0.996  0.989  1.009  0.998  1.009       0.0
+                 standard, 1000 it   400   7.4384    89.21   0.0183  0.135    0.018  0.018  0.018  0.018  0.018       4.0
+               reweighted, 1000 it   400   5.4958    65.91   0.0573  0.238    0.058  0.057  0.057  0.057  0.057       4.9
+                   matrix, 1000 it   400   7.1688    85.97   0.0228  0.032    0.021  0.018  0.022  0.034  0.020       4.3
+hiv N(ref_mean, ref_cov) EXACT draws   400   0.1039     0.93   1.0001  1.000    1.000  0.993  1.006  0.997  1.003       0.0
+                 standard, 1000 it   400   6.5315    58.42   0.0889  0.054    0.406  0.000  0.000  0.000  0.037       6.3
+               reweighted, 1000 it   400   4.5764    40.93   0.1608  0.083    0.611  0.003  0.001  0.000  0.189       6.9
+                   matrix, 1000 it   400   5.3896    48.21   0.1181  0.148    0.443  0.056  0.020  0.023  0.047       6.2
+  hiv isotropic N(0,I) EXACT draws   400   0.1039     0.93   1.0001  1.000    1.002  1.003  0.995  1.001  0.999       0.0
+                 standard, 1000 it   400  11.2418   100.55   0.0099  0.098    0.010  0.010  0.010  0.010  0.010       5.0
+               reweighted, 1000 it   400   9.2342    82.60   0.0293  0.170    0.029  0.029  0.029  0.029  0.030       6.8
+                   matrix, 1000 it   400  10.7843    96.46   0.0136  0.031    0.014  0.017  0.013  0.012  0.011       6.2
+Traceback (most recent call last):
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation7/exp04_gaussian.py", line 85, in <module>
+    rec[f"{lab}_K{K}"] = {"start": row(f"{name} {lab} EXACT draws", X0, 0.0)}
+                                   ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation7/exp04_gaussian.py", line 77, in row
+    r = dict(energy=sc.energy(P), steinR=H.stein_R(g, P),
+                                         ~~~~~~~~~^^^^^^
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation7/harness7.py", line 184, in stein_R
+    g = np.asarray(m.gradient(P, m.data), np.float64)
+  File "/home/jamie/miniforge3/envs/magi/lib/python3.14/site-packages/jax/_src/array.py", line 414, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/magi/lib/python3.14/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+  File "/home/jamie/miniforge3/envs/magi/lib/python3.14/site-packages/jax/_src/array.py", line 614, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: [0] Failed to load in-memory CUBIN (compiled for a different GPU?).: CUDA_ERROR_OUT_OF_MEMORY: out of memory

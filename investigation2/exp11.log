@@ -1,0 +1,16 @@
+preconditioners:
+        full H: cond=1.878e+04  n_nonpos=0
+       diag(H): cond=3.045e+01  n_nonpos=0
+      GP-prior: cond=2.789e+07  n_nonpos=0
+     blocktime: cond=3.051e+01  n_nonpos=0
+
+                   variant            width%NUTS   dev  R_glob   R_th  energy   bias  sdrat               profile soft->stiff
+-----------------------------------------------------------------------------------------------------------------------------
+     whitened IMQ / full H      [86.7 90.7 88.4]  11.4   0.998  1.330   0.053  0.036  0.931   [0.915 0.955 0.986 0.961 0.974]
+    whitened IMQ / diag(H)      [38.6 13.3 19.6]  76.1   0.995  1.026   0.595  0.210  0.179   [0.288 1.18  1.141 1.017 1.472]
+                  GP-prior   DIVERGED at it=3
+  whitened IMQ / blocktime      [38.7 13.4 19.8]  76.0   0.995  1.027   0.596  0.210  0.179   [0.288 1.18  1.141 1.015 1.473]
+                  identity   DIVERGED at it=4
+        NUTS k=800 (floor)   [103.2  95.   97.7]   3.5   1.003  0.975   0.048  0.034  1.003   [0.995 1.01  0.999 1.009 1.   ]
+
+saved -> exp11_precond_results.json

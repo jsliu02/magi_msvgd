@@ -1,0 +1,128 @@
+--- Part 1: the law, adaptive (median-heuristic) bandwidth
+      kernel     d      K    ln K  var ratio      x d  (x d)/lnK   h_final    sec
+    standard    50     10   2.303    0.04603    2.302      1.000     2.222    8.0
+    standard    50     20   2.996    0.05980    2.990      0.998     2.102    6.4
+    standard    50     50   3.912    0.07824    3.912      1.000     2.041    7.3
+    standard    50    100   4.605    0.09039    4.519      0.981     1.961   13.2
+    standard    50    200   5.298    0.10714    5.357      1.011     2.012    5.2
+    standard    50    400   5.991    0.11246    5.623      0.939     1.804    4.8
+    standard    50    800   6.685    0.13215    6.607      0.988     1.920    5.5
+    standard    50   1600   7.378    0.16795    8.398      1.138     2.255    9.6
+    standard    50   3200   8.071    0.20532   10.266      1.272     2.547   18.9
+    standard   100     10   2.303    0.02299    2.299      0.999     2.220    2.8
+    standard   100     20   2.996    0.03195    3.195      1.067     2.235    3.7
+    standard   100     50   3.912    0.03912    3.912      1.000     2.041    4.0
+    standard   100    100   4.605    0.04603    4.603      0.999     2.019    8.0
+    standard   100    200   5.298    0.05268    5.268      0.994     1.987    3.8
+    standard   100    400   5.991    0.06074    6.074      1.014     2.015    3.3
+    standard   100    800   6.685    0.06162    6.162      0.922     1.795    4.3
+    standard   100   1600   7.378    0.07626    7.626      1.034     2.030    7.4
+E0902 16:22:34.264881  224709 slow_operation_alarm.cc:73] Constant folding an instruction is taking > 1s:
+
+  %concatenate.2 = s32[5118400,2]{1,0} concatenate(%constant.172, %constant.174), dimensions={1}, metadata={op_name="jit(scan)/while/body/closed_call/jit(step)/concatenate" stack_frame_id=48}
+
+This isn't necessarily a bug; constant-folding is inherently a trade-off between compilation time and speed at runtime. XLA has some guards that attempt to keep constant folding from taking too long, but fundamentally you'll always be able to come up with an input program that takes a long time.
+
+If you'd like to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.
+E0902 16:22:35.062190  224553 slow_operation_alarm.cc:140] The operation took 1.797349442s
+Constant folding an instruction is taking > 1s:
+
+  %concatenate.2 = s32[5118400,2]{1,0} concatenate(%constant.172, %constant.174), dimensions={1}, metadata={op_name="jit(scan)/while/body/closed_call/jit(step)/concatenate" stack_frame_id=48}
+
+This isn't necessarily a bug; constant-folding is inherently a trade-off between compilation time and speed at runtime. XLA has some guards that attempt to keep constant folding from taking too long, but fundamentally you'll always be able to come up with an input program that takes a long time.
+
+If you'd like to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.
+    standard   100   3200   8.071    0.08996    8.996      1.115     2.203   18.7
+    standard   325     10   2.303    0.00710    2.309      1.003     2.226    2.6
+    standard   325     20   2.996    0.00925    3.005      1.003     2.121    2.8
+    standard   325     50   3.912    0.01199    3.898      0.996     2.034    3.8
+    standard   325    100   4.605    0.01417    4.606      1.000     2.020    4.8
+    standard   325    200   5.298    0.06279   20.405      3.851     6.660    3.3
+    standard   325    400   5.991    0.01853    6.023      1.005     2.009    3.3
+    standard   325    800   6.685    0.02074    6.740      1.008     2.015    5.0
+    standard   325   1600   7.378    0.02425    7.880      1.068     2.061    7.8
+    standard   325   3200   8.071    0.02523    8.201      1.016     2.016   22.9
+  reweighted    50     10   2.303    0.09230    4.615      2.004     4.447    2.1
+  reweighted    50     20   2.996    0.38958   19.479      6.502    13.508    2.5
+  reweighted    50     50   3.912    0.40031   20.015      5.116    10.217    3.7
+  reweighted    50    100   4.605    0.41689   20.845      4.526     9.047    5.4
+  reweighted    50    200   5.298    0.43857   21.929      4.139     8.253    2.0
+  reweighted    50    400   5.991    0.47665   23.833      3.978     7.914    2.8
+  reweighted    50    800   6.685    0.45556   22.778      3.407     6.787    3.6
+  reweighted    50   1600   7.378    0.46977   23.488      3.184     6.343    6.7
+  reweighted    50   3200   8.071    0.46240   23.120      2.865     5.717   17.5
+  reweighted   100     10   2.303    0.27158   27.158     11.795    26.639    1.8
+  reweighted   100     20   2.996    0.31324   31.324     10.456    21.796    1.6
+  reweighted   100     50   3.912    0.28418   28.418      7.264    15.016    2.9
+  reweighted   100    100   4.605    0.27958   27.958      6.071    12.333    4.8
+  reweighted   100    200   5.298    0.27742   27.742      5.236    10.516    2.4
+  reweighted   100    400   5.991    0.27933   27.933      4.662     9.335    2.4
+  reweighted   100    800   6.685    0.28701   28.701      4.294     8.587    2.8
+  reweighted   100   1600   7.378    0.30343   30.343      4.113     8.215    6.4
+  reweighted   100   3200   8.071    0.29479   29.479      3.652     7.300   17.1
+  reweighted   325     10   2.303    0.08641   28.085     12.197    27.184    2.1
+  reweighted   325     20   2.996    0.05485   17.825      5.950    12.559    2.3
+  reweighted   325     50   3.912    0.06669   21.675      5.541    11.488    3.3
+  reweighted   325    100   4.605    0.07852   25.518      5.541    11.311    5.9
+  reweighted   325    200   5.298    0.05004   16.263      3.070     6.274    2.7
+  reweighted   325    400   5.991    0.05179   16.832      2.809     5.731    3.1
+  reweighted   325    800   6.685    0.05352   17.394      2.602     5.313    4.3
+  reweighted   325   1600   7.378    0.05342   17.362      2.353     4.749    7.8
+  reweighted   325   3200   8.071    0.05704   18.539      2.297     4.647   23.6
+
+--- Part 2: the mechanism. Bandwidth FIXED at mult * h*, h* = 2d/ln K (the median heuristic evaluated at the target)
+      kernel     d      K    mult     h used  var ratio      x d   SteinR    sec
+    standard   100    400     0.1       3.34    0.09263    9.263   0.0926    1.9
+    standard   100    400     0.3      10.01    0.22075   22.075   0.2207    1.6
+    standard   100    400     1.0      33.38    0.48777   48.777   0.4878    1.5
+    standard   100    400     3.0     100.14    0.80314   80.314   0.8031    1.7
+    standard   100    400    10.0     333.81    0.96807   96.807   0.9681    1.2
+    standard   100    400   100.0    3338.08    0.99244   99.244   0.9924    1.5
+    standard   325    400     0.1      10.85    0.07145   23.222   0.0715    2.0
+    standard   325    400     0.3      32.55    0.16108   52.352   0.1611    1.6
+    standard   325    400     1.0     108.49    0.34621  112.518   0.3462    1.6
+    standard   325    400     3.0     325.46    0.58455  189.978   0.5845    1.4
+    standard   325    400    10.0    1084.88    0.81111  263.612   0.8111    1.6
+    standard   325    400   100.0   10848.77    0.97613  317.241   0.9761    1.6
+  reweighted   100    400     0.1       3.34    0.15683   15.683   0.1568    1.1
+  reweighted   100    400     0.3      10.01    0.24953   24.953   0.2495    1.2
+  reweighted   100    400     1.0      33.38    0.61586   61.586   0.6159    1.1
+  reweighted   100    400     3.0     100.14    1.19929  119.929   1.1993    1.3
+  reweighted   100    400    10.0     333.81    1.94677  194.677   1.9468    1.5
+  reweighted   100    400   100.0    3338.08    3.40694  340.694   3.4069    1.0
+  reweighted   325    400     0.1      10.85    0.08294   26.956   0.0829    1.7
+  reweighted   325    400     0.3      32.55    0.19341   62.857   0.1934    1.6
+  reweighted   325    400     1.0     108.49    0.45427  147.639   0.4543    1.5
+  reweighted   325    400     3.0     325.46    0.76374  248.216   0.7637    1.6
+  reweighted   325    400    10.0    1084.88    1.42335  462.590   1.4234    1.6
+  reweighted   325    400   100.0   10848.77    2.43988  792.961   2.4399    1.4
+
+--- Part 3a: SVGD velocity field AT exact draws from N(0, I_d), no optimizer
+      kernel     d      K     d/dt log Var      +- se   d/dt mean^2
+    standard    10    100       -1.936e-02    3.6e-04    -7.712e-04
+    standard    10    400       -4.915e-03    1.1e-04    -9.811e-05
+    standard    50    100       -1.970e-02    2.0e-05    -4.994e-04
+    standard    50    400       -4.979e-03    3.6e-06    -3.512e-05
+    standard   100    100       -1.974e-02    6.8e-06    -4.331e-04
+    standard   100    400       -4.981e-03    1.1e-06    -2.879e-05
+    standard   325    100       -1.978e-02    1.7e-06    -4.146e-04
+    standard   325    400       -4.986e-03    1.6e-07    -2.687e-05
+  reweighted    10    100       -1.308e+02    6.7e+01    -4.005e-01
+  reweighted    10    400       -8.042e+01    5.0e+01    -1.226e-02
+  reweighted    50    100       -4.608e+05    8.1e+04    -6.464e+03
+  reweighted    50    400       -1.626e+05    2.3e+04    -4.600e+02
+  reweighted   100    100       -1.832e+06    2.3e+05    -3.328e+04
+  reweighted   100    400       -5.723e+05    3.5e+04    -2.579e+03
+  reweighted   325    100       -3.997e+06    8.8e+04    -8.625e+04
+  reweighted   325    400       -1.081e+06    1.3e+04    -6.026e+03
+
+--- Part 3b: SGD at 1e-2, run long. Target of the law: ln(K)/d
+      kernel     d      K    iters  var ratio      x d    ln K    sec
+    standard    50    400     2000    0.89670   44.835   5.991    1.4
+    standard    50    400     8000    0.67542   33.771   5.991    2.3
+    standard    50    400    40000    0.21931   10.965   5.991    7.6
+    standard    50    400   200000    0.12404    6.202   5.991   30.8
+    standard   100    400     2000    0.90654   90.654   5.991    1.5
+    standard   100    400     8000    0.67663   67.663   5.991    2.1
+    standard   100    400    40000    0.17644   17.644   5.991    7.7
+    standard   100    400   200000    0.06112    6.112   5.991   33.7

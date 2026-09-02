@@ -1,0 +1,27 @@
+
+=== fn  dim=325 p=3 ===
+  Stein R on reference subsample : harness 0.9996 | MSVGD._stein_R 0.9996   (target 1)
+  reliable=True  ess=388/512 khat=-0.56 nnull=0
+  fit() 12.2s  energy 0.1036 (floor 0.0366, k=2000 floor 0.0211)
+  fit() max|theta err| 0.0472 sd (floor 0.0100)
+  fit() Stein R 1.2625 | sd ratio 0.9923 | whitened median sd 1.0032
+  fit() whitened cov eigs: min 1.313e-01 med 0.941 max 2.611
+  ref  whitened cov eigs: min 5.200e-01 med 0.976 max 1.636
+
+=== hiv  dim=608 p=5 ===
+  Stein R on reference subsample : harness 1.0008 | MSVGD._stein_R 1.0008   (target 1)
+  reliable=True  ess=324/512 khat=-0.37 nnull=0
+  fit() 28.6s  energy 0.0489 (floor 0.0446, k=2000 floor 0.0292)
+  fit() max|theta err| 0.0491 sd (floor 0.0081)
+  fit() Stein R 0.9996 | sd ratio 0.9988 | whitened median sd 1.0066
+  fit() whitened cov eigs: min 2.052e-01 med 0.901 max 2.464
+  ref  whitened cov eigs: min 3.809e-01 med 0.955 max 1.891
+
+=== lorenz  dim=306 p=3 ===
+  Stein R on reference subsample : harness 0.9981 | MSVGD._stein_R 0.9981   (target 1)
+  reliable=True  ess=346/512 khat=0.26 nnull=0
+  fit() 9.4s  energy 0.0479 (floor 0.0317, k=2000 floor 0.0205)
+  fit() max|theta err| 0.0220 sd (floor 0.0405)
+  fit() Stein R 1.0197 | sd ratio 1.0024 | whitened median sd 1.0041
+  fit() whitened cov eigs: min 3.617e-01 med 0.954 max 1.954
+  ref  whitened cov eigs: min 5.344e-01 med 0.976 max 1.617

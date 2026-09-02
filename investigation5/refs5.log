@@ -1,0 +1,2 @@
+      fn: 96000 draws in 187s | max Rhat 1.0027 | min ESS 96000 | div 1422 | leapfrog/chain 173951
+    hes1: 96000 draws in 367s | max Rhat 1.0049 | min ESS 96000 | div 17269 | leapfrog/chain 365673

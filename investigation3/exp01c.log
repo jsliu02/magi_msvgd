@@ -1,0 +1,24 @@
+E0901 19:26:08.023743   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 17.67GiB (18972033024 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.023908   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 15.90GiB (17074829312 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024037   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 14.31GiB (15367346176 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024162   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 12.88GiB (13830610944 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024286   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 11.59GiB (12447549440 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024403   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 10.43GiB (11202794496 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024519   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 9.39GiB (10082514944 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024636   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 8.45GiB (9074263040 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024757   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 7.61GiB (8166836736 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024874   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.84GiB (7350152704 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.024987   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 6.16GiB (6615137280 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.025099   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 5.54GiB (5953623552 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+E0901 19:26:08.025212   54306 cuda_executor.cc:1206] [0] Failed to allocate device memory: INTERNAL: [0] Failed to allocate 4.99GiB (5358261248 bytes) of device memory: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+k=400, 10 GN iterations: converged 400/400   max residual 1.58e-13
+  log-w sd  all=1.379   converged-only=1.379
+  ESS       all=21.6/400   converged-only=21.6/400 (5.4%)
+  kappa     max=1.038  mean=0.426   (condition (C) needs <1)
+  fraction of converged samples with kappa<1: 99.8%
+
+                   variant            width%NUTS   dev  R_glob   R_th  energy   bias  sdrat               profile soft->stiff
+-----------------------------------------------------------------------------------------------------------------------------
+RTO unweighted (converged)      [91.1 96.5 85.5]   9.0   0.996  0.768   0.152  0.089  0.944   [0.945 0.999 1.01  1.014 1.011]
+              RTO weighted      [83.9 98.  86.1]  10.7   0.963  0.807   1.099  0.206  1.045   [0.936 0.886 0.932 0.875 0.958]
+        NUTS k=800 (floor)   [103.2  95.   97.7]   3.5   1.003  0.975   0.048  0.034  1.003   [0.995 1.01  0.999 1.009 1.   ]

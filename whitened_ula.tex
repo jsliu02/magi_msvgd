@@ -1,0 +1,663 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.05in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\xmap}{x_{\text{\tiny MAP}}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\title{\bfseries Whitened Unadjusted Langevin\\[2pt]
+\large A sampler for high-dimensional MAGI posteriors}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This note documents \code{MSVGD.whitened\_ula}, an alternative to the SVGD solver for
+high-dimensional ODE-inference posteriors. The method reparameterizes the target by the inverse
+square root of the Hessian at the mode and runs Langevin dynamics in those coordinates,
+Metropolis-adjusted by default. Two
+properties make the combination work where SVGD does not: the reparameterization removes the
+anisotropy that defeats any scalar-parameterized sampler, and Langevin's Brownian term supplies
+the entropy that SVGD's kernel repulsion fails to supply in high dimension. A side effect of
+whitening is that the Langevin discretization bias becomes isotropic and known in closed form,
+so it can be divided out exactly. On a $d=325$ FitzHugh--Nagumo posterior the method is
+statistically indistinguishable from an 8-chain, 64{,}000-draw NUTS reference at roughly
+$1/35$ of the cost. We characterize the regime in which it fails---weakly identified posteriors, predictable from
+the Hessian spectrum before any sampling---and show that neither the adjusted nor the unadjusted
+variant is safe there, for opposite reasons: unadjusted Langevin is transient on the
+super-quadratic potentials that polynomial ODE vector fields produce, while the Metropolis
+correction cures the transience but is not geometrically ergodic on the same tails, so chains
+started outside the bulk freeze instead. Both failures are detected and raised.
+\end{abstract}
+
+\section{Motivation}
+
+Stein Variational Gradient Descent evolves an ensemble $\{x_i\}_{i=1}^k$ by a deterministic flow
+combining a drift toward high density with a kernel repulsion intended to reproduce the target's
+spread. On the posterior considered here it collapses: the ensemble converges to a distribution
+far narrower than the target, and does so in a specific, directional way.
+
+The collapse is not a matter of tuning. Initialized at an ensemble that is already correct---exact
+draws from a Gaussian statistically indistinguishable from the reference---standard SVGD drives
+the Stein-identity dispersion diagnostic
+\begin{equation}
+  R \;=\; -\frac{1}{k\,d}\sum_{i=1}^{k}\,(x_i-\bar{x})\cdot\nabla\log p(x_i)
+  \;\longrightarrow\; 1 \quad\text{under the target}
+  \label{eq:steinR}
+\end{equation}
+from $1.15$ down to $0.03$. Smaller step sizes only slow the decay. The fixed point of the flow
+is itself wrong, so no initialization, bandwidth rule, or annealing schedule recovers it.
+
+\section{The geometry of the target}
+
+Write $U(x) = -\log p(x)$ for the negative log posterior on $\R^d$, let $\xmap$ be its minimizer,
+and let
+\begin{equation}
+  H \;=\; \nabla^2 U(\xmap) \;=\; -\nabla^2 \log p(\xmap).
+\end{equation}
+For the $d=325$ FitzHugh--Nagumo/MAGI posterior, $H$ is positive definite with eigenvalues
+spanning
+\[
+  \lambda_{\min} = 5.31, \qquad \lambda_{\max} = 9.97\times10^{4},
+  \qquad \kappa = \lambda_{\max}/\lambda_{\min} = 1.88\times 10^{4}.
+\]
+Geometrically the posterior is a long, thin ellipsoid: broad in the low-frequency components of
+the latent trajectory, extremely tight in the high-frequency components that the Gaussian-process
+prior pins down.
+
+This is fatal for any sampler whose behaviour is governed by a single scalar---one step size, or
+one kernel bandwidth. A value appropriate to the tight directions is far too small for the broad
+ones, and conversely. Section~\ref{sec:analysis} makes the cost precise: it is a factor of
+$\kappa$.
+
+\section{The Laplace metric}
+
+If the posterior were exactly Gaussian its covariance would be $H^{-1}$. Take the symmetric
+square root $L = H^{-1/2}$ and reparameterize
+\begin{equation}
+  x \;=\; \xmap + L\,y, \qquad L = L^{\!\top} = H^{-1/2}.
+  \label{eq:reparam}
+\end{equation}
+Under the quadratic model $\log p(x) = -\tfrac12 (x-\xmap)^{\!\top} H (x-\xmap) + c$, substituting
+\eqref{eq:reparam} gives
+\begin{equation}
+  \log \tilde p(y) \;=\; -\tfrac12\, y^{\!\top} H^{-1/2} H H^{-1/2} y + c
+  \;=\; -\tfrac12\, y^{\!\top} y + c,
+\end{equation}
+so the whitened target is $\mathcal{N}(0, I_d)$: a unit sphere. All of the anisotropy has been
+absorbed into the change of variables, and a single scalar step size is now appropriate in every
+direction. For a target that is only approximately Gaussian, $\tilde p$ is correspondingly only
+approximately isotropic, which is all that is required.
+
+\section{Langevin dynamics in whitened coordinates}
+
+The overdamped Langevin diffusion
+$\mathrm{d}y_t = \nabla \log \tilde p(y_t)\,\mathrm{d}t + \sqrt{2}\,\mathrm{d}W_t$
+has $\tilde p$ as its stationary distribution. Discretized with step size $\varepsilon$ this is
+the unadjusted Langevin algorithm (ULA),
+\begin{equation}
+  y_{t+1} \;=\; y_t + \varepsilon\,\nabla_y \log \tilde p(y_t) + \sqrt{2\varepsilon}\, z_t,
+  \qquad z_t \sim \mathcal{N}(0, I_d).
+  \label{eq:ula}
+\end{equation}
+
+Two remarks.
+
+\paragraph{The chain rule is free.} Because $L$ is symmetric,
+\begin{equation}
+  \nabla_y \log \tilde p(y) \;=\; \Big(\tfrac{\partial x}{\partial y}\Big)^{\!\top}
+  \nabla_x \log p(x) \;=\; L^{\!\top}\nabla_x \log p(x) \;=\; L\,\nabla_x \log p(x).
+\end{equation}
+The implementation therefore reuses the existing vectorized gradient of the \emph{original}
+target and post-multiplies by $L$. No transformed log-density and no second automatic
+differentiation pass are needed. (The Jacobian of \eqref{eq:reparam} is constant, so it
+contributes nothing to the gradient.)
+
+\subsection{The Metropolis correction}
+\label{sec:mala}
+
+\eqref{eq:ula} is biased at finite $\varepsilon$, and Section~\ref{sec:nongauss} shows it is
+also unstable on the potentials ODE models produce. Accepting the proposal
+$y' = y + \varepsilon\,\nabla\log\tilde p(y) + \sqrt{2\varepsilon}\,z$ with probability
+$\min(1,e^{\Lambda})$, where
+\begin{equation}
+  \Lambda \;=\; \log\tilde p(y') - \log\tilde p(y) + \tfrac12\|z\|^2
+  - \frac{\big\|\,y'-y+\varepsilon\nabla\log\tilde p(y')\,\big\|^2}{4\varepsilon},
+  \label{eq:mala}
+\end{equation}
+gives MALA, which is exact for any $\varepsilon$. The forward proposal term collapses to
+$\tfrac12\|z\|^2$ because the noise is already in hand, so only the reverse term must be
+assembled; carrying $(\log\tilde p,\nabla\log\tilde p)$ between steps costs one
+\emph{value-and-gradient} evaluation per step, the same as plain ULA. Non-finite proposals are
+rejected automatically, since any comparison against a NaN ratio is false. This is the default.
+
+Because MALA is exact at any step size, $\varepsilon$ affects only efficiency, and it can be
+tuned during a discarded warmup by Robbins--Monro on
+$\log\varepsilon \leftarrow \log\varepsilon + \gamma(\hat a - a^\star)$ with
+$a^\star = 0.574$, the high-dimensional MALA optimum \cite{robertsrosenthal}. A constant gain
+suffices because $\hat a$ is averaged over all $k$ chains and so is already precise each step.
+In practice the adaptation reaches the same $\varepsilon$ from initial values differing by an
+order of magnitude, which removes the step size as a tuning decision.
+
+\paragraph{The noise is the entropy.} This is the conceptual difference from SVGD. SVGD is
+deterministic and must manufacture the target's spread through a kernel repulsion term;
+Section~\ref{sec:gram} shows that this term silently vanishes in high dimension. ULA instead
+carries an explicit Brownian term whose stationary distribution is the target by construction.
+There is no kernel and no bandwidth, and the $k$ ``particles'' are $k$ \emph{independent} chains,
+so the sampler is embarrassingly parallel.
+
+\section{Analysis}
+\label{sec:analysis}
+
+Both of the following results follow from the exactly solvable case: a single eigendirection of a
+Gaussian target with precision $\lambda$, i.e.\ variance $1/\lambda$. There
+$\nabla \log p(y) = -\lambda y$ and \eqref{eq:ula} becomes the AR(1) recursion
+\begin{equation}
+  y_{t+1} \;=\; (1-\varepsilon\lambda)\, y_t + \sqrt{2\varepsilon}\, z_t.
+  \label{eq:ar1}
+\end{equation}
+
+\subsection{Stability and mixing: why whitening is necessary}
+
+Recursion \eqref{eq:ar1} is stable iff $|1-\varepsilon\lambda| < 1$, i.e.
+\begin{equation}
+  0 < \varepsilon < 2/\lambda .
+\end{equation}
+This must hold simultaneously in every direction, so the step size is capped by the
+\emph{stiffest}: $\varepsilon < 2/\lambda_{\max}$. Meanwhile the autocorrelation in a direction of
+precision $\lambda$ decays as $(1-\varepsilon\lambda)^t$, giving a relaxation time of roughly
+$\tau_\lambda \approx 1/(\varepsilon\lambda)$ steps, which is worst in the \emph{softest}
+direction. Writing $\varepsilon = c/\lambda_{\max}$ with $c<2$,
+\begin{equation}
+  \tau_{\max} \;\approx\; \frac{1}{\varepsilon \lambda_{\min}}
+  \;=\; \frac{\lambda_{\max}}{c\,\lambda_{\min}} \;=\; \frac{\kappa}{c}.
+\end{equation}
+An unwhitened sampler therefore needs a number of steps proportional to the condition number
+$\kappa$. At $\kappa = 1.88\times 10^4$ the stable step size is $\varepsilon < 2\times 10^{-5}$ and
+the soft directions need $\mathcal{O}(10^4)$ steps per relaxation time.
+
+After whitening every $\lambda$ equals $1$, so $\varepsilon$ may be $\mathcal{O}(10^{-2})$ and
+$\tau = 1/\varepsilon \approx 100$ steps \emph{in all $d$ directions at once}. The dependence on
+$\kappa$ is removed entirely. This is why the whole run costs seconds.
+
+\subsection{Discretization bias: exact and removable}
+
+ULA is biased at any finite step size. Taking variances in \eqref{eq:ar1}, the stationary variance
+$s_\lambda$ satisfies $s_\lambda = (1-\varepsilon\lambda)^2 s_\lambda + 2\varepsilon$, hence
+$s_\lambda\,\varepsilon\lambda\,(2-\varepsilon\lambda) = 2\varepsilon$ and
+\begin{equation}
+  s_\lambda \;=\; \frac{1}{\lambda}\cdot\frac{1}{1 - \varepsilon\lambda/2},
+  \qquad\text{so}\qquad
+  \frac{\Var_{\text{ULA}}}{\Var_{\text{target}}} \;=\; \frac{1}{1-\varepsilon\lambda/2}.
+  \label{eq:bias}
+\end{equation}
+Untransformed, this inflation is \emph{anisotropic}: it varies across directions with $\lambda$,
+and diverges as $\varepsilon\lambda \to 2$. It is therefore not correctable without knowing the
+whole spectrum.
+
+After whitening, $\lambda \equiv 1$ and \eqref{eq:bias} collapses to a single scalar that is the
+same in every direction,
+\begin{equation}
+  \boxed{\;\frac{\Var_{\text{ULA}}}{\Var_{\text{target}}} \;=\; \frac{1}{1-\varepsilon/2}\;}
+  \label{eq:isobias}
+\end{equation}
+which contains no unknowns. Under MALA there is no such bias to remove; for the unadjusted
+variant it can be removed exactly by rescaling the whitened deviations,
+\begin{equation}
+  y_i \;\longleftarrow\; \bar{y} + (y_i - \bar{y})\sqrt{1-\varepsilon/2}\,,
+  \label{eq:correction}
+\end{equation}
+a correction that is exact in the Gaussian limit the method already assumes and that introduces
+no tuning constant. Table~\ref{tab:bias} verifies \eqref{eq:isobias} on a $40$-dimensional
+anisotropic Gaussian, and Table~\ref{tab:corr} shows the effect of \eqref{eq:correction}.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{rrrr}
+\toprule
+$\varepsilon$ & measured $R$ & $1/(1-\varepsilon/2)$ & rel.\ error \\
+\midrule
+0.200 & 1.1087 & 1.1111 & 0.0022 \\
+0.100 & 1.0495 & 1.0526 & 0.0030 \\
+0.050 & 1.0236 & 1.0256 & 0.0020 \\
+0.020 & 1.0086 & 1.0101 & 0.0015 \\
+0.010 & 1.0042 & 1.0050 & 0.0008 \\
+\bottomrule
+\end{tabular}
+\caption{The predicted isotropic inflation \eqref{eq:isobias} against the measured Stein
+diagnostic \eqref{eq:steinR}. Target: $d=40$ Gaussian with $\operatorname{cond}(\Sigma)=81$,
+$k=6000$ chains, 4000 steps. Agreement is within $0.3\%$ over a factor of twenty in
+$\varepsilon$.}
+\label{tab:bias}
+\end{table}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{rrr}
+\toprule
+$\varepsilon$ & $R$ uncorrected & $R$ corrected \\
+\midrule
+0.20 & 1.1087 & 0.9978 \\
+0.10 & 1.0495 & 0.9970 \\
+0.05 & 1.0236 & 0.9980 \\
+0.01 & 1.0042 & 0.9992 \\
+\bottomrule
+\end{tabular}
+\caption{Effect of the correction \eqref{eq:correction}. Besides removing the bias, it makes the
+result largely insensitive to the choice of $\varepsilon$, which removes the main tuning burden.
+Enabled by default (\code{bias\_correct=True}).}
+\label{tab:corr}
+\end{table}
+
+\section{Why the SVGD repulsion fails: Gram-matrix degeneracy}
+\label{sec:gram}
+
+SVGD's spread comes from the repulsion term $\sum_j \nabla_{x_j} k(x_j, x_i)$, whose magnitude is
+controlled by the off-diagonal entries of the Gram matrix. With the RBF kernel
+$k(x,x') = \exp(-\|x-x'\|^2/h)$ and the usual median heuristic
+$h = \operatorname{median}_{i<j}\|x_i-x_j\|^2 / \log k$, high dimension is unkind. Squared
+distances concentrate---for a roughly isotropic ensemble $\|x_i-x_j\|^2$ has relative standard
+deviation $\mathcal{O}(d^{-1/2})$---so for essentially every pair
+$\|x_i-x_j\|^2/h \approx \log k$, giving
+\begin{equation}
+  k(x_i,x_j) \;\approx\; e^{-\log k} \;=\; \frac{1}{k}\quad (i\neq j),
+  \qquad k(x_i,x_i) = 1 .
+\end{equation}
+The Gram matrix is thus $K \approx I + \tfrac1k(\mathbf{1}\mathbf{1}^{\!\top}-I)$. Its row-wise
+participation ratio, the effective number of neighbours each particle interacts with, is
+\begin{equation}
+  n_{\text{eff}} \;=\; \frac{\big(\sum_j K_{ij}\big)^2}{\sum_j K_{ij}^2}
+  \;\longrightarrow\; \frac{2^2}{1} \;=\; 4 \qquad (k \to \infty),
+\end{equation}
+independently of $k$. Each particle effectively sees about four neighbours no matter how large the
+ensemble, the repulsion is negligible, the drift dominates, and the ensemble collapses onto the
+mode. Table~\ref{tab:gram} confirms all of this numerically, including the prediction that adding
+particles does not help.
+
+An inverse multiquadric kernel $(1+\|x-x'\|^2/h)^{-1/2}$ decays only as $(1+\log k)^{-1/2}$ and so
+does not degenerate; it is an effective alternative fix, but it must still be run in whitened
+coordinates and it inherits SVGD's contraction behaviour. Langevin avoids the issue entirely by
+not using a kernel.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{rrrrrrr}
+\toprule
+$k$ & mean $\|x_i-x_j\|^2/h$ & $\log k$ & RBF off-diag. & $1/k$ & IMQ off-diag. & $n_{\text{eff}}$ \\
+\midrule
+ 200 & 5.310 & 5.298 & $5.34\times10^{-3}$ & $5.0\times10^{-3}$ & 0.399 & 4.26 \\
+ 800 & 6.696 & 6.685 & $1.40\times10^{-3}$ & $1.25\times10^{-3}$ & 0.361 & 4.56 \\
+3200 & 8.087 & 8.071 & $3.73\times10^{-4}$ & $3.1\times10^{-4}$ & 0.332 & 4.93 \\
+\bottomrule
+\end{tabular}
+\caption{Measured Gram-matrix statistics on whitened ensembles, $d=325$. The predictions
+$\|x_i-x_j\|^2/h \to \log k$, RBF off-diagonal $\to 1/k$, and $n_{\text{eff}} \to 4$ all hold. The
+effective neighbour count does not grow with $k$, so increasing the ensemble size cannot repair
+the repulsion.}
+\label{tab:gram}
+\end{table}
+
+\section{The algorithm}
+
+\begin{algorithm}[H]
+\SetAlgoLined
+\KwIn{log-density $\log p$, start $x_0$, chains $k$, steps $T$, warmup $T_{\text{warm}}$, step size $\varepsilon$}
+\KwOut{$\{x_i\}_{i=1}^k$ approximately distributed as $p$}
+$\xmap \leftarrow \arg\max \log p$ \tcp*{mode-find from $x_0$}
+$H \leftarrow -\nabla^2 \log p(\xmap)$; eigendecompose $H = V\Lambda V^{\!\top}$ in float64\;
+\lIf{$\min \operatorname{diag}(\Lambda) \le 0$}{\textbf{abort}: metric undefined (see \S\ref{sec:failure})}
+$L \leftarrow V \Lambda^{-1/2} V^{\!\top}$ \tcp*{$= H^{-1/2}$, symmetric}
+$y_i \sim \mathcal{N}(0, I_d)$ for $i=1,\dots,k$ \tcp*{$=$ the Laplace approximation}
+$(\ell_i, g_i) \leftarrow$ value-and-grad of $\log p$ at $\xmap + y_i L$; \ \ $g_i \leftarrow g_i L$\;
+\For{$t = 1$ \KwTo $T_{\text{warm}} + T$}{
+  $z_i \sim \mathcal{N}(0, I_d)$; \ \ $s_i \leftarrow \varepsilon g_i + \sqrt{2\varepsilon}\, z_i$\;
+  $(\ell_i', g_i') \leftarrow$ value-and-grad at $\xmap + (y_i + s_i)L$; \ \ $g_i' \leftarrow g_i' L$\;
+  \eIf{\normalfont metropolis}{
+    $\Lambda_i \leftarrow (\ell_i' - \ell_i) + \tfrac12\|z_i\|^2 - \|s_i + \varepsilon g_i'\|^2/(4\varepsilon)$\;
+    accept chain $i$ with prob.\ $\min(1, e^{\Lambda_i})$, updating $(y_i,\ell_i,g_i)$; tally per chain\;
+    \lIf{$t \le T_{\text{warm}}$}{$\log\varepsilon \mathrel{+}= \gamma(\hat a - 0.574)$ \tcp*[f]{else freeze}}
+  }{
+    $y_i \leftarrow y_i + s_i$; \ \ \lIf{$y$ non-finite}{\textbf{abort}: transient (see \S\ref{sec:nongauss})}
+  }
+}
+\lIf{\normalfont metropolis}{\textbf{abort} if $\Lambda_F > 5\%$ or $F > 10\%$ (see \S\ref{sec:sticky})}
+\lElse{$y_i \leftarrow \bar y + (y_i - \bar y)\sqrt{1-\varepsilon/2}$ \tcp*[f]{\eqref{eq:correction}}}
+\Return $\xmap + y_i L$\;
+\caption{Whitened Langevin, Metropolis-adjusted by default (\code{MSVGD.whitened\_ula})}
+\end{algorithm}
+
+\paragraph{On the initialization.} Drawing $y \sim \mathcal{N}(0,I)$ is exactly the Laplace
+approximation expressed in whitened coordinates, so the chains begin at approximate stationarity
+and there is no burn-in to discard---which is why a couple of thousand steps suffices. Langevin is
+ergodic and does forget its initialization: starting instead from a tight ball reaches an
+identical answer by 2000 steps, merely more slowly at first (Table~\ref{tab:init}). What is
+\emph{not} safe is starting wider, since the initial ensemble then already straddles the region
+where the quadratic model fails. $\mathcal{N}(0,I)$ is both the natural choice and the safe upper
+end.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+initialization & 50 steps & 200 steps & 2000 steps \\
+\midrule
+$\mathcal{N}(0,I)$ \ (Laplace) & 0.596 & 0.100 & \textbf{0.0484} \\
+$0.05\cdot\mathcal{N}(0,I)$ \ (tight ball) & 0.983 & 0.109 & \textbf{0.0484} \\
+$3\cdot\mathcal{N}(0,I)$ \ (over-dispersed) & \multicolumn{3}{c}{diverged} \\
+\bottomrule
+\end{tabular}
+\caption{Energy distance to the reference (sampling floor $0.048$) versus initialization and
+number of steps, $d=325$. The Laplace start converges faster but not to a different answer.}
+\label{tab:init}
+\end{table}
+
+\section{Empirical validation}
+
+Table~\ref{tab:main} compares the method against an 8-chain, $64{,}000$-draw NUTS gold standard
+(0 divergences, $\hat R \le 1.0048$, minimum ESS 1202) on the $d=325$ FitzHugh--Nagumo posterior.
+Metrics are: energy distance to the reference in reference-whitened coordinates; the
+variance-weighted ratio of ensemble to reference variance along the reference principal axes,
+which unlike energy distance is sensitive to the few directions carrying most of the variance;
+the Stein diagnostic \eqref{eq:steinR}; the Mahalanobis error of the ensemble mean; and the mean
+absolute deviation of the three parameter credible-interval widths. Every ``floor'' is measured,
+by scoring an independent $800$-draw subsample of the reference through the identical pipeline.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+& energy & varwtd & $R$ & mean err. & CI dev.\ (\%) & wall-clock \\
+\midrule
+NUTS, $k=800$ \emph{(sampling floor)} & 0.048 & 1.020 & 1.003 & 0.034 & 3.5 & 125\,s \\
+\textbf{whitened ULA} & \textbf{0.050} & 0.972 & 0.993 & 0.037 & \textbf{2.3} & \textbf{3.6\,s} \\
+SVGD, density-reweighted kernel & 3.665 & 1.409 & 0.244 & 0.176 & 5.0 & $\sim$4\,s \\
+SVGD, standard kernel & 6.742 & 0.674 & 0.022 & 0.068 & 27.4 & $\sim$4\,s \\
+\bottomrule
+\end{tabular}
+\normalsize
+\caption{Whitened ULA against the NUTS gold standard and against the two SVGD configurations it
+replaces. The method is at the sampling floor on every metric. Note that the credible-interval
+deviation column orders the SVGD rows favourably while their actual distributional error is
+$70$--$140\times$ worse, which is why several complementary metrics are reported.}
+\label{tab:main}
+\end{table}
+
+A caution on the reweighted-kernel row: its per-coordinate standard deviations average to $1.037$,
+which looks nearly correct, but this is cancellation. It is $43$--$56\%$ \emph{over}-dispersed in
+the leading eigendirections and $88\%$ \emph{collapsed} in the remaining 305. Single scalar
+summaries conceal this; the variance-weighted column does not.
+
+\section{Robustness to non-Gaussianity}
+\label{sec:nongauss}
+
+Because $H^{-1}$ enters only as a preconditioner and never as the answer, ULA targets the exact
+posterior whatever its shape. Non-Gaussianity therefore does not \emph{bias} the method the way it
+breaks any procedure that returns a Gaussian. Three things can still go wrong, and they differ
+sharply in severity.
+
+\paragraph{(a) Bias --- does not occur.} On a $12$-dimensional banana
+$\log p \propto -x_0^2/2S^2 - \tfrac12\big(x_1 - b(x_0^2-S^2)\big)^2 - \tfrac12\|x_{2:}\|^2$
+($S=10$, $b=0.05$), the Laplace approximation is badly wrong: it assigns $x_1$ a standard
+deviation $0.14$ times the truth. Whitened ULA nonetheless walks toward the correct answer,
+the skewness of $x_1$ climbing $0.75 \to 1.43 \to 2.00$ against an exact value of $2.79$ as the
+budget grows. It is slow, not wrong.
+
+\paragraph{(b) Mixing --- degrades gracefully.} The speedup of
+Section~\ref{sec:analysis} assumes $H$ at the mode represents the global geometry. Where it does
+not---curved ridges, multimodality---the preconditioner is merely unhelpful rather than harmful,
+and the sampler reverts toward the unwhitened mixing rate.
+
+\paragraph{(c) Transience --- the real hazard, and it is specific to polynomial ODEs.}
+The explicit Euler step of \eqref{eq:ula} is unstable for super-quadratic potentials
+\cite{robertstweedie}. For $U(x) = x^2/2 + a|x|^p/p$ the noise-free map is
+$x \mapsto x(1-\varepsilon) - \varepsilon a\,x^{p-1}$, which is expanding once
+$\varepsilon\big(1 + a x^{p-2}\big) > 2$, i.e.\ beyond a critical radius
+\begin{equation}
+  R_{\text{crit}} \;=\; \Big(\frac{2/\varepsilon - 1}{a}\Big)^{\!1/(p-2)}
+  \;\propto\; \varepsilon^{-1/(p-2)} .
+  \label{eq:rcrit}
+\end{equation}
+A chain that wanders past $R_{\text{crit}}$ is flung outward and never returns; the algorithm
+diverges rather than returning a biased answer. Table~\ref{tab:transience} shows divergence
+occurring precisely when $R_{\text{crit}}$ falls inside the range the chains actually visit.
+
+The scaling in \eqref{eq:rcrit} is the practical problem. Reducing the step size buys safety only
+as $\varepsilon^{-1/(p-2)}$: at $p=4$ that is $\varepsilon^{-1/2}$, but at $p=6$ it is
+$\varepsilon^{-1/4}$, so cutting $\varepsilon$ by a factor of $20$ enlarges the safe region by
+only $2.1\times$. \textbf{At high polynomial degree the step size is a very weak lever.}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{rrrlr}
+\toprule
+$p$ & $a$ & $\varepsilon$ & outcome & $R_{\text{crit}}$ \\
+\midrule
+2 & $0$        & any   & finite, s.d.\ $1.00$        & $\infty$ \\
+4 & $10^{-3}$  & any   & finite, s.d.\ $1.00$        & 95--446 \\
+4 & $1$        & 0.20  & \textbf{diverged}           & 3.00 \\
+4 & $1$        & 0.05  & finite, $\max|x| = 2.32$    & 6.24 \\
+4 & $1$        & 0.01  & finite, $\max|x| = 2.14$    & 14.11 \\
+6 & $10^{-3}$  & any   & finite, s.d.\ $1.00$        & 9.7--21 \\
+6 & $1$        & \emph{all three} & \textbf{diverged} & 1.73--3.76 \\
+\bottomrule
+\end{tabular}
+\caption{Transience of ULA on $U = x^2/2 + a|x|^p/p$ in $d=8$; the potential is Gaussian at the
+mode, so the positive-definiteness check passes and the failure is purely a discretization
+effect. Divergence occurs exactly when $R_{\text{crit}}$ from \eqref{eq:rcrit} enters the range
+the chains visit ($\approx 2$--$4.5$).}
+\label{tab:transience}
+\end{table}
+
+\subsection*{Why this makes ODE posteriors adversarial}
+
+The MAGI log-density contains the term $r^{\!\top} K^{-1} r$ with
+$r = f(X,\theta) - \dot\mu - m(X-\mu)$. For a vector field $f$ polynomial of degree $q$ in the
+state, $r$ is degree $q$ and this term is \textbf{degree $2q$}. FitzHugh--Nagumo has a cubic
+term $V^3/3$, so $q=3$ and the potential is degree six---the worst row of
+Table~\ref{tab:transience}.
+
+Measuring the growth of $U$ along whitened directions confirms this, and shows where it lives:
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+direction & $U(3)$ & $U(30)$ & $U(100)$ & fitted exponent \\
+\midrule
+flattest eigenvector & $5.13\times10^{1}$ & $6.90\times10^{5}$ & $3.66\times10^{9}$ & \textbf{6.20} \\
+median eigenvector   & $3.74\times10^{0}$ & $4.41\times10^{2}$ & $5.06\times10^{3}$ & 2.03 \\
+stiffest eigenvector & $4.06\times10^{0}$ & $4.46\times10^{2}$ & $4.99\times10^{3}$ & 2.01 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The potential is quadratic in almost every direction---the Gaussian-process prior and the
+observation term dominate there---but degree six along the \emph{flattest} eigenvector, which is
+precisely the direction the whitening stretches most, by $\lambda_{\min}^{-1/2}$.
+
+This sharpens the account of the $\sigma = 0.5$ failure in Section~\ref{sec:failure}. It is not
+merely that the metric is inaccurate. Weak identification shrinks $\lambda_{\min}$, whitening
+therefore stretches the flat direction by a large factor, the chains reach the region where the
+degree-six term dominates, and there the Euler discretization is transient. The pre-flight
+diagnostic works because $\lambda_{\min}$ controls how far the chains are thrown along exactly
+the direction in which the potential is worst behaved.
+
+\paragraph{Consequences.} FitzHugh--Nagumo at the baseline data density is safe because the
+observation term is strong enough to keep the chains near the data, far inside $R_{\text{crit}}$.
+It is, however, already at $p=6$: a quintic vector field would give $p=10$, where
+$R_{\text{crit}} \propto \varepsilon^{-1/8}$ and the step size ceases to be a usable control at
+all. Shrinking $\varepsilon$ is therefore not the remedy; the Metropolis correction of
+Section~\ref{sec:mala} is, but only partially, as follows.
+
+\subsection{The Metropolis correction cures transience but introduces stickiness}
+\label{sec:sticky}
+
+MALA rejects the overshooting proposal, so no chain is thrown to infinity. It does \emph{not}
+make the sampler reliable on these targets, because MALA is not geometrically ergodic when the
+tails are lighter than exponential \cite{robertstweedie}: from far out, \emph{every} proposal
+overshoots and is rejected, so a chain that \emph{starts} there can never move. Transience is
+replaced by its mirror image---frozen chains---and where transience announced itself with a NaN,
+stickiness returns a plausible-looking but over-dispersed answer.
+
+The effect is entirely one of initialization, as the following isolates. On
+$U = x^2/2 + |x|^p/p$ in $d=8$ with $k=4000$:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+$p$ & frozen chains & $\E[x^2]$ / exact & mean acceptance \\
+\midrule
+2  & $0.00\%$  & 0.993 & 0.571 \\
+4  & $0.03\%$  & 0.996 & 0.573 \\
+6  & $16.35\%$ & 1.50  & 0.577 \\
+10 & $35.68\%$ & 2.57  & 0.574 \\
+\midrule
+\multicolumn{4}{l}{\emph{$p=10$, but initialized at $0.3\cdot\mathcal{N}(0,I)$, inside the bulk:}} \\
+10 & --- & \textbf{0.9989} & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Started inside the bulk, MALA recovers $\E[x^2]$ to $0.1\%$ even at $p=10$; started at
+$\mathcal{N}(0,I)$, a third of the chains freeze in the tail and contribute $63\%$ of the second
+moment. Note the mean acceptance rate: it sits at the $0.574$ target throughout and is
+completely uninformative about the failure. This is why the implementation tracks acceptance
+\emph{per chain}.
+
+\paragraph{Detection.} Two independent things can go wrong, so the implementation raises on
+either. Writing $F$ for the fraction of chains that accepted nothing at all and $\Lambda_F$ for
+the relative change in the ensemble's scale from dropping them:
+\begin{itemize}[leftmargin=1.3em,itemsep=2pt]
+  \item $\Lambda_F > 5\%$: the frozen chains are tail outliers dominating the moments.
+  \item $F > 10\%$: that much of the ``sample'' is just the initialization. This is the case a
+  leverage test cannot see, because when the \emph{whole} ensemble starts outside the bulk the
+  frozen chains are typical of it and $\Lambda_F$ stays small.
+\end{itemize}
+Table~\ref{tab:guard} shows the two triggers separating every case tested, with no false alarm
+on the well-identified problem.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrll}
+\toprule
+case & $F$ & $\Lambda_F$ & verdict & accuracy \\
+\midrule
+synthetic $p=2$    & $0.00\%$  & $0.00\%$  & passed & $\E[x^2]$ ratio 0.9933 \\
+synthetic $p=4$    & $0.03\%$  & $0.10\%$  & passed & $\E[x^2]$ ratio 0.9964 \\
+synthetic $p=6$    & $16.35\%$ & $17.76\%$ & \textbf{raised} & --- \\
+synthetic $p=10$   & $35.68\%$ & $25.58\%$ & \textbf{raised} & --- \\
+MAGI baseline, 3 seeds & $0.5$--$1.3\%$ & $0.1$--$0.3\%$ & passed & energy $0.0496$--$0.0503$ \\
+MAGI $\sigma=0.5$  & $42.58\%$ & $0.48\%$  & \textbf{raised} & --- \\
+\bottomrule
+\end{tabular}
+\caption{The two triggers, across every case tested. The $\sigma=0.5$ row is the one that
+motivates the second trigger: $43\%$ of chains frozen but negligible leverage, because there the
+entire ensemble is stuck near its start.}
+\label{tab:guard}
+\end{table}
+
+\paragraph{What actually fixes it.} Nothing here does, for a genuinely weakly identified target;
+both variants fail and both are detected. A tamed or projected integrator that caps the drift
+would remove the transience at its source, and a better-centred initialization would remove the
+stickiness, but the underlying problem is that $H^{-1}$ is the wrong metric in that regime. The
+honest scope is the pre-flight check of Section~\ref{sec:failure}.
+
+\section{Failure mode and diagnostics}
+\label{sec:failure}
+
+The metric is only as trustworthy as the quadratic model at $\xmap$. If the posterior has a
+near-flat direction, $H^{-1}$ claims very large variance there, whitening stretches that direction
+accordingly, and the chains are placed where the model's nonlinearity---here the cubic term of the
+FitzHugh--Nagumo vector field---no longer resembles a quadratic. The method then diverges.
+
+This is predictable from the spectrum of $H$ alone, at no additional cost and with no reference
+chain (Table~\ref{tab:failure}). Both failure modes raise rather than return silently:
+
+\begin{itemize}[leftmargin=1.3em,itemsep=2pt]
+  \item \textbf{$H$ not positive definite.} Caught before any sampling. In practice this most
+  often signals an unconverged mode-find, so the check doubles as a MAP-convergence test.
+  \item \textbf{Non-finite state during sampling.} Caught during; the raised error reports
+  $\lambda_{\min}$ and $\tr(H^{-1})$ and identifies weak identification as the cause.
+\end{itemize}
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrrrl}
+\toprule
+setting & $\lambda_{\min}$ & $\operatorname{cond}(H)$ & $\tr(H^{-1})$ & flattest s.d. & outcome \\
+\midrule
+baseline, $\sigma=0.2$ & 5.307 & $1.9\times10^{4}$ & 0.98 & 0.43 & at the floor \\
+half the observations & 1.784 & $7.4\times10^{4}$ & 1.68 & 0.75 & works \\
+quarter of the observations & 1.591 & $1.0\times10^{5}$ & 1.88 & 0.79 & degraded \\
+noisy, $\sigma=0.5$ & \textbf{0.0078} & $3.1\times10^{7}$ & \textbf{133.2} & 11.36 & \textbf{diverges} \\
+\bottomrule
+\end{tabular}
+\caption{Pre-flight diagnostic. As identification weakens, $\lambda_{\min}$ collapses and
+$\tr(H^{-1})$---the total variance claimed by the Laplace approximation---explodes. At
+$\sigma=0.5$ the quadratic model predicts a standard deviation of $11.4$ in the flattest
+direction, where the true posterior is bounded by the ODE nonlinearity rather than by curvature.}
+\label{tab:failure}
+\end{table}
+
+Where the check fails, NUTS on the untransformed target remains the appropriate fallback; nothing
+described here improves on it in that regime. It is worth noting, however, that this method fails
+\emph{loudly}, whereas the SVGD configurations at the same setting return plausible-looking but
+badly wrong ensembles.
+
+\section{Implementation notes}
+
+\begin{itemize}[leftmargin=1.3em,itemsep=3pt]
+  \item \textbf{The eigendecomposition is performed in float64} on the host irrespective of the
+  particle dtype. Whitening is governed by the \emph{smallest} eigenvalues of $H$, since
+  $H^{-1/2}$ amplifies the flattest directions most, and those are precisely the ones a float32
+  decomposition resolves worst.
+
+  \item \textbf{The metric admits almost no error.} Replacing $H$ by
+  $0.99H + 0.01\operatorname{diag}(H)$ costs an order of magnitude in accuracy; evaluating $H$ one
+  posterior standard deviation away from $\xmap$---a relative Frobenius perturbation of
+  $0.4\%$---is enough to make it indefinite. Diagonal, block-diagonal and prior-only
+  approximations all fail, because the ill-conditioning resides in the correlations rather than in
+  the marginal scales ($\operatorname{cond}(\operatorname{diag} H)=30$ against
+  $\operatorname{cond}(H)=1.9\times10^4$).
+
+  \item \textbf{Cost} is $\mathcal{O}(d)$ gradient evaluations, $\mathcal{O}(d^2)$ memory and
+  $\mathcal{O}(d^3)$ to factor, which is what bounds the accessible dimension---comfortable to
+  $d\sim 10^3$--$10^4$. Scaling beyond a dense Hessian is the principal open problem; the natural
+  randomized low-rank route is unpromising precisely because the method depends on the bottom of
+  the spectrum.
+
+  \item \textbf{The sampling loop} is a single \code{lax.scan}, so the whole run compiles to one
+  program. Setup dominates: $2.1$\,s for the mode-find, $0.8$\,s for the Hessian, and under
+  $0.5$\,s for 2000 Langevin steps at $k=800$, $d=325$. The Metropolis correction is
+  approximately free, since \code{value\_and\_grad} costs what the gradient alone costs and the
+  accepted state is carried between steps.
+
+  \item \textbf{Acceptance is tracked per chain, not just on average.} The characteristic
+  failure of Section~\ref{sec:sticky} leaves the mean acceptance sitting exactly at its target
+  while a third of the chains have never moved, so a mean-acceptance check---the obvious
+  thing---detects nothing.
+\end{itemize}
+
+\begin{thebibliography}{1}
+\bibitem{robertsrosenthal} G.~O. Roberts and J.~S. Rosenthal.
+Optimal scaling of discrete approximations to Langevin diffusions.
+\emph{J. R. Statist. Soc. B}, 60(1):255--268, 1998.
+\bibitem{robertstweedie} G.~O. Roberts and R.~L. Tweedie.
+Exponential convergence of Langevin distributions and their discrete approximations.
+\emph{Bernoulli}, 2(4):341--363, 1996.
+\end{thebibliography}
+
+\end{document}

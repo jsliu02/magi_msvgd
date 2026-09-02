@@ -1,0 +1,232 @@
+==================== fn ====================
+MAGI diagnosis  --  d = 325, p = 3, 18.0 s, no sampling
+
+  check                           value     required         what it measures
+  --------------------------------------------------------------------------------------------------------
+  distance to the mode          1.1e-03      < 1e-02   OK    sqrt(g' H^-1 g): how far this point is from the
+                                                               true mode, in posterior sd. Unitless, so it
+                                                               means the same across problems and dtypes
+  gradient norm                 2.6e-03           --   info  the raw ||grad log p||, for reference. It carries
+                                                               units and its floor is set by the working
+                                                               precision, so it is not thresholded here
+  negative curvature                  0            0   OK    directions in which the mode is a saddle, not a
+                                                               maximum; a Gaussian there does not exist
+  null directions                     0            0   OK    flat directions of the SCALED Hessian, so this is
+                                                               unit-free; see the parameter table for which
+  condition number              4.4e+03      < 1e+12   OK    of the scaled Hessian; beyond this the Laplace
+                                                               covariance is not numerically meaningful
+  curvature variation           3.8e+02      < 1e+03   OK    cond of the Hessian in the mode's own metric, a
+                                                               standard deviation away. 1 means the posterior is
+                                                               Gaussian in that metric; large means the curvature
+                                                               varies and a fixed mass matrix cannot track it, so
+                                                               HMC will struggle however long it is run
+  distinct optima                     1            1   OK    over 5 solves that converged, from the mode
+                                                               plus 4 dispersed restarts. More than one
+                                                               means the mode found depends on the start
+  --------------------------------------------------------------------------------------------------------
+  The mode check is "distance to the mode", NOT the gradient norm. ||grad log p|| carries the
+  units of the log-density and of theta, and its floor is set by the working precision -- in
+  float32 it bottoms out near 1e-2 on these problems and no absolute tolerance can be met.
+  sqrt(g' H^-1 g) rescales it to posterior standard deviations, where < 0.01 means the mode is
+  located to within a hundredth of one and nothing downstream is affected.
+
+  parameter            MAP      post sd   sd/|MAP|   log p fall       at         verdict
+  --------------------------------------------------------------------------------------------------------
+  theta[0]             0.19      0.02406      0.127          inf       --   OK    identified
+  theta[1]          0.22432      0.08457      0.377        123.1   1e+00x   OK    identified
+  theta[2]           2.9717      0.06787     0.0228          inf       --   OK    identified
+  --------------------------------------------------------------------------------------------------------
+
+  state       GP lengthscale    grid dt    ell/dt  obs gap/dt         what it means
+  --------------------------------------------------------------------------------------------------------
+  X[0]                  1.65      0.125     13.20         4.0   OK    smooth enough to constrain between observations
+  X[1]                 1.562      0.125     12.50         4.0   OK    smooth enough to constrain between observations
+  --------------------------------------------------------------------------------------------------------
+  The GP prior is all that holds the trajectory between observations, so a lengthscale short
+  against the grid spacing lets it interpolate the data and do anything in between. This is
+  set by the hyperparameter fit, before any inference, and is not something the posterior
+  approximation can repair.
+
+  "log p fall" is the drop in the profiled log-density on walking that parameter out to "at" times its
+  own scale, with the states re-profiled at each step so the walk follows the ridge. Below
+  3 nats the posterior is improper there. "at" is the furthest radius that resolved.
+
+  STATUS: OK
+    The mode is a unique maximum, every parameter is proper, and the GP constrains the states.
+==================== hes1 ====================
+MAGI diagnosis  --  d = 106, p = 7, 6.7 s, no sampling
+
+  check                           value     required         what it measures
+  --------------------------------------------------------------------------------------------------------
+  distance to the mode          1.7e-04      < 1e-02   OK    sqrt(g' H^-1 g): how far this point is from the
+                                                               true mode, in posterior sd. Unitless, so it
+                                                               means the same across problems and dtypes
+  gradient norm                 1.0e-02           --   info  the raw ||grad log p||, for reference. It carries
+                                                               units and its floor is set by the working
+                                                               precision, so it is not thresholded here
+  negative curvature                  0            0   OK    directions in which the mode is a saddle, not a
+                                                               maximum; a Gaussian there does not exist
+  null directions                     0            0   OK    flat directions of the SCALED Hessian, so this is
+                                                               unit-free; see the parameter table for which
+  condition number              1.5e+05      < 1e+12   OK    of the scaled Hessian; beyond this the Laplace
+                                                               covariance is not numerically meaningful
+  curvature variation           1.1e+06      < 1e+03   FAIL  cond of the Hessian in the mode's own metric, a
+                                                               standard deviation away. 1 means the posterior is
+                                                               Gaussian in that metric; large means the curvature
+                                                               varies and a fixed mass matrix cannot track it, so
+                                                               HMC will struggle however long it is run
+  distinct optima                     1            1   OK    over 5 solves that converged, from the mode
+                                                               plus 4 dispersed restarts. More than one
+                                                               means the mode found depends on the start
+  --------------------------------------------------------------------------------------------------------
+  The mode check is "distance to the mode", NOT the gradient norm. ||grad log p|| carries the
+  units of the log-density and of theta, and its floor is set by the working precision -- in
+  float32 it bottoms out near 1e-2 on these problems and no absolute tolerance can be met.
+  sqrt(g' H^-1 g) rescales it to posterior standard deviations, where < 0.01 means the mode is
+  located to within a hundredth of one and nothing downstream is affected.
+
+  parameter            MAP      post sd   sd/|MAP|   log p fall       at         verdict
+  --------------------------------------------------------------------------------------------------------
+  theta[0]         0.031645      0.01588      0.502          inf       --   WARN  weak
+  theta[1]           0.3388      0.07566      0.223          inf       --   OK    identified
+  theta[2]         0.039146      0.01009      0.258          inf       --   OK    identified
+  theta[3]         0.026424     0.002829      0.107          inf       --   OK    identified
+  theta[4]          0.49326      0.08222      0.167          inf       --   OK    identified
+  theta[5]           11.333        6.291      0.555          inf       --   WARN  weak
+  theta[6]          0.19557       0.1031      0.527          inf       --   WARN  weak
+  --------------------------------------------------------------------------------------------------------
+
+  state       GP lengthscale    grid dt    ell/dt  obs gap/dt         what it means
+  --------------------------------------------------------------------------------------------------------
+  X[0]                    60        7.5      8.00         2.0   OK    smooth enough to constrain between observations
+  X[1]                 47.48        7.5      6.33         2.0   OK    smooth enough to constrain between observations
+  X[2]                 29.54        7.5      3.94         nan   OK    smooth enough to constrain between observations
+  --------------------------------------------------------------------------------------------------------
+  The GP prior is all that holds the trajectory between observations, so a lengthscale short
+  against the grid spacing lets it interpolate the data and do anything in between. This is
+  set by the hyperparameter fit, before any inference, and is not something the posterior
+  approximation can repair.
+
+  "log p fall" is the drop in the profiled log-density on walking that parameter out to "at" times its
+  own scale, with the states re-profiled at each step so the walk follows the ridge. Below
+  3 nats the posterior is improper there. "at" is the furthest radius that resolved.
+
+  STATUS: FAIL
+    The curvature varies by 1e+06 over the posterior, so no fixed metric fits it and
+    HMC or NUTS will mix badly however long they are run. Methods that integrate the
+    states out rather than traversing the joint geometry are not affected in the same way.
+    The mode itself is not trustworthy; anything built on it inherits that.
+==================== hiv ====================
+MAGI diagnosis  --  d = 608, p = 5, 67.2 s, no sampling
+
+  check                           value     required         what it measures
+  --------------------------------------------------------------------------------------------------------
+  distance to the mode          6.7e-06      < 1e-02   OK    sqrt(g' H^-1 g): how far this point is from the
+                                                               true mode, in posterior sd. Unitless, so it
+                                                               means the same across problems and dtypes
+  gradient norm                 3.6e-04           --   info  the raw ||grad log p||, for reference. It carries
+                                                               units and its floor is set by the working
+                                                               precision, so it is not thresholded here
+  negative curvature                  0            0   OK    directions in which the mode is a saddle, not a
+                                                               maximum; a Gaussian there does not exist
+  null directions                     0            0   OK    flat directions of the SCALED Hessian, so this is
+                                                               unit-free; see the parameter table for which
+  condition number              4.0e+02      < 1e+12   OK    of the scaled Hessian; beyond this the Laplace
+                                                               covariance is not numerically meaningful
+  curvature variation           1.2e+00      < 1e+03   OK    cond of the Hessian in the mode's own metric, a
+                                                               standard deviation away. 1 means the posterior is
+                                                               Gaussian in that metric; large means the curvature
+                                                               varies and a fixed mass matrix cannot track it, so
+                                                               HMC will struggle however long it is run
+  distinct optima                     1            1   OK    over 5 solves that converged, from the mode
+                                                               plus 4 dispersed restarts. More than one
+                                                               means the mode found depends on the start
+  --------------------------------------------------------------------------------------------------------
+  The mode check is "distance to the mode", NOT the gradient norm. ||grad log p|| carries the
+  units of the log-density and of theta, and its floor is set by the working precision -- in
+  float32 it bottoms out near 1e-2 on these problems and no absolute tolerance can be met.
+  sqrt(g' H^-1 g) rescales it to posterior standard deviations, where < 0.01 means the mode is
+  located to within a hundredth of one and nothing downstream is affected.
+
+  parameter            MAP      post sd   sd/|MAP|   log p fall       at         verdict
+  --------------------------------------------------------------------------------------------------------
+  theta[0]           36.274        1.431     0.0394         6851   1e+00x   OK    identified
+  theta[1]          0.10952     0.006562     0.0599    1.403e+11   1e+04x   OK    identified
+  theta[2]          0.49951     0.008023     0.0161    1.475e+11   1e+04x   OK    identified
+  theta[3]           982.51        18.96     0.0193     1.64e+10   1e+04x   OK    identified
+  theta[4]           2.9489      0.03205     0.0109    1.761e+08   1e+04x   OK    identified
+  --------------------------------------------------------------------------------------------------------
+
+  state       GP lengthscale    grid dt    ell/dt  obs gap/dt         what it means
+  --------------------------------------------------------------------------------------------------------
+  X[0]                     5        0.1     50.00         2.0   OK    smooth enough to constrain between observations
+  X[1]                     5        0.1     50.00         2.0   OK    smooth enough to constrain between observations
+  X[2]                0.8658        0.1      8.66         2.0   OK    smooth enough to constrain between observations
+  --------------------------------------------------------------------------------------------------------
+  The GP prior is all that holds the trajectory between observations, so a lengthscale short
+  against the grid spacing lets it interpolate the data and do anything in between. This is
+  set by the hyperparameter fit, before any inference, and is not something the posterior
+  approximation can repair.
+
+  "log p fall" is the drop in the profiled log-density on walking that parameter out to "at" times its
+  own scale, with the states re-profiled at each step so the walk follows the ridge. Below
+  3 nats the posterior is improper there. "at" is the furthest radius that resolved.
+
+  STATUS: OK
+    The mode is a unique maximum, every parameter is proper, and the GP constrains the states.
+==================== lorenz ====================
+MAGI diagnosis  --  d = 306, p = 3, 20.1 s, no sampling
+
+  check                           value     required         what it measures
+  --------------------------------------------------------------------------------------------------------
+  distance to the mode          6.0e-04      < 1e-02   OK    sqrt(g' H^-1 g): how far this point is from the
+                                                               true mode, in posterior sd. Unitless, so it
+                                                               means the same across problems and dtypes
+  gradient norm                 5.1e-04           --   info  the raw ||grad log p||, for reference. It carries
+                                                               units and its floor is set by the working
+                                                               precision, so it is not thresholded here
+  negative curvature                  0            0   OK    directions in which the mode is a saddle, not a
+                                                               maximum; a Gaussian there does not exist
+  null directions                     0            0   OK    flat directions of the SCALED Hessian, so this is
+                                                               unit-free; see the parameter table for which
+  condition number              6.3e+03      < 1e+12   OK    of the scaled Hessian; beyond this the Laplace
+                                                               covariance is not numerically meaningful
+  curvature variation           1.9e+02      < 1e+03   OK    cond of the Hessian in the mode's own metric, a
+                                                               standard deviation away. 1 means the posterior is
+                                                               Gaussian in that metric; large means the curvature
+                                                               varies and a fixed mass matrix cannot track it, so
+                                                               HMC will struggle however long it is run
+  distinct optima                     3            1   OK    over 5 solves that converged, from the mode
+                                                               plus 4 dispersed restarts. More than one
+                                                               means the mode found depends on the start
+  --------------------------------------------------------------------------------------------------------
+  The mode check is "distance to the mode", NOT the gradient norm. ||grad log p|| carries the
+  units of the log-density and of theta, and its floor is set by the working precision -- in
+  float32 it bottoms out near 1e-2 on these problems and no absolute tolerance can be met.
+  sqrt(g' H^-1 g) rescales it to posterior standard deviations, where < 0.01 means the mode is
+  located to within a hundredth of one and nothing downstream is affected.
+
+  parameter            MAP      post sd   sd/|MAP|   log p fall       at         verdict
+  --------------------------------------------------------------------------------------------------------
+  theta[0]           2.7413        0.174     0.0635        121.2   1e+00x   OK    identified
+  theta[1]           27.908       0.8806     0.0316          inf       --   OK    identified
+  theta[2]            10.22         1.27      0.124          inf       --   OK    identified
+  --------------------------------------------------------------------------------------------------------
+
+  state       GP lengthscale    grid dt    ell/dt  obs gap/dt         what it means
+  --------------------------------------------------------------------------------------------------------
+  X[0]                0.2923      0.025     11.69         4.0   OK    smooth enough to constrain between observations
+  X[1]                 0.227      0.025      9.08         4.0   OK    smooth enough to constrain between observations
+  X[2]                0.4367      0.025     17.47         4.0   OK    smooth enough to constrain between observations
+  --------------------------------------------------------------------------------------------------------
+  The GP prior is all that holds the trajectory between observations, so a lengthscale short
+  against the grid spacing lets it interpolate the data and do anything in between. This is
+  set by the hyperparameter fit, before any inference, and is not something the posterior
+  approximation can repair.
+
+  "log p fall" is the drop in the profiled log-density on walking that parameter out to "at" times its
+  own scale, with the states re-profiled at each step so the walk follows the ridge. Below
+  3 nats the posterior is improper there. "at" is the furthest radius that resolved.
+
+  STATUS: OK
+    The mode is a unique maximum, every parameter is proper, and the GP constrains the states.
