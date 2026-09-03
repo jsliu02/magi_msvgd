@@ -565,9 +565,12 @@ depends on $X$ \cite{companion}.
 
 Drawing $\theta$ from the joint Laplace marginal $\mathcal N(\hat\theta, (H^{-1})_{\theta\theta})$
 is the obvious choice and a poor one: that object accounts for the $\theta$--$X$ coupling only to
-first order, and on Hes1 the log importance weights then span $8{,}400$ nats with
-$\mathrm{ESS} = 0.6\%$. Since $p$ is small, the profiled marginal's own mode and curvature are
-directly computable---a Newton solve in $p$ dimensions by central differences through
+first order. At an identical node budget it costs a factor of $28$ in effective sample size on
+Lorenz ($67.5\% \to 2.4\%$), $10$ on Hes1 ($21.1\% \to 2.0\%$) and $2.2$ on FitzHugh--Nagumo
+($75.7\% \to 35.0\%$). HIV is unaffected ($63.4\% \to 62.6\%$), which is consistent with the rest
+of its profile: it is the one system here whose posterior is close to Gaussian in the joint, so
+first order is enough. Since $p$ is small, the profiled marginal's own mode and curvature are
+directly computable instead---a Newton solve in $p$ dimensions by central differences through
 \eqref{eq:profile}, costing $O(p^2)$ profile solves per step.
 
 This is worth doing for the mode. The profiled mode is \emph{not} the joint mode's $\theta$: on
@@ -590,8 +593,10 @@ $X^\star(\theta)$ satisfies $\nabla_X U(\theta, X^\star) = 0$, so
 $H_{XX}\,dX^\star/d\theta + H_{X\theta} = 0$ and the sensitivity is one solve against a
 factorisation already in hand. Starting each node from
 $X_{\mathrm{MAP}} + (dX^\star/d\theta)(\theta - \theta_{\mathrm{MAP}})$ rather than from
-$X_{\mathrm{MAP}}$ lets the inner iteration count fall from six to two at unchanged accuracy
-(Table~\ref{tab:predictor}).
+$X_{\mathrm{MAP}}$ buys one halving of the inner iteration count: with the predictor two
+iterations already reach the reference floor, without it four are needed
+(Table~\ref{tab:predictor}). We had previously reported this as six against two, on the pre-fix
+posterior; the effect is real and smaller than that.
 
 \begin{table}[t]
 \centering\small
@@ -599,12 +604,15 @@ $X_{\mathrm{MAP}}$ lets the inner iteration count fall from six to two at unchan
 \toprule
 inner iterations & 2 & 4 & 8\\
 \midrule
-from $X_{\mathrm{MAP}}$ & 0.0437 / 5.8\,s & 0.0065 / 6.8\,s & 0.0056 / 8.7\,s\\
-\textbf{from the predictor} & \textbf{0.0059 / 4.5\,s} & 0.0063 / 6.1\,s & 0.0065 / 9.1\,s\\
+from $X_{\mathrm{MAP}}$ & 0.0262 & 0.0058 & 0.0121\\
+\textbf{from the predictor} & \textbf{0.0120} & 0.0127 & 0.0128\\
 \bottomrule
 \end{tabular}
-\caption{Largest parameter error in reference standard deviations, and wall clock, on
-FitzHugh--Nagumo. The chain-to-chain floor is $0.0120$.}
+\caption{Largest parameter error in reference standard deviations on FitzHugh--Nagumo, against a
+chain-to-chain floor of $0.0100$. Everything at or below about $0.013$ is at the floor and the
+differences among those entries are Monte Carlo noise; the one entry that is clearly off it is
+$X_{\mathrm{MAP}}$ at two iterations. The predictor's benefit is that two iterations suffice, which
+is roughly a quarter of the wall clock.}
 \label{tab:predictor}
 \end{table}
 
@@ -625,17 +633,21 @@ across the suite, in units of the joint Laplace standard deviation.
 \toprule
 & $h/\mathrm{sd}$ & 0.05 & 0.2 & 0.8 & 1.6 & 3.2 & 6.4 & 12.8\\
 \midrule
-fn, float64 & $\theta_1$ & 1.145 & 1.145 & 1.150 & 1.163 & 1.217 & 1.425 & ---\\
-fn, float32 & $\theta_1$ & \textbf{0.439} & 1.147 & 1.146 & 1.162 & 1.217 & 1.425 & ---\\
-hes1, both  & $\theta_5$ & 169.4 & 129.0 & \textbf{34.5} & 13.0 & 4.0 & 1.3 & ---\\
-lorenz, both& $\theta_2$ & 0.505 & 0.504 & 0.482 & \textbf{---} & --- & --- & ---\\
+fn, float32   & $\theta_2$ & \textbf{--0.098} & 1.028 & 1.063 & 1.068 & 1.073 & 1.086 & 1.126\\
+fn, float64   & $\theta_1$ & 1.112 & 1.112 & 1.116 & 1.128 & 1.176 & 1.359 & \textbf{1.967}\\
+hiv, float64  & $\theta_0$ & 21.330 & 21.330 & 21.330 & 21.330 & 21.330 & 21.330 & 21.330\\
+lorenz, f64   & $\theta_2$ & 1.056 & 1.058 & 1.076 & 1.138 & 1.441 & \textbf{4.198} & 1.191\\
+hes1, float64 & $\theta_5$ & 216.9 & 215.7 & \textbf{192.1} & --- & --- & --- & ---\\
 \bottomrule
 \end{tabular}
 \caption{Diagonal curvature of the profiled log-density, scaled so a Gaussian profile would read
-$1.0$ at every $h$. Three different failure modes bound the step: round-off at small $h$ in single
-precision (fn), truncation at large $h$ where the profile is non-quadratic (hes1), and outright
-failure of the inner solve (lorenz). The usable windows do not overlap---fn in float32 needs
-$h \gtrsim 0.2$ while hes1 needs $h \lesssim 0.05$---so no constant serves both.}
+$1.0$ at every $h$, after the hyperparameter fit of Section~\ref{sec:gp}. Four regimes appear.
+Round-off at small $h$ in single precision drives FitzHugh--Nagumo's $\theta_2$ \emph{negative}.
+Truncation bends the estimate at large $h$, gently on FitzHugh--Nagumo in double and sharply on
+Hes1, whose $\theta_5$ has already moved $12\%$ by $h = 0.8$ and whose probes stop resolving
+beyond $1.6$. Lorenz shows both, and the non-monotone excursion at $6.4$ is a reminder that a
+two-point comparison can land on either side of a spike. HIV is flat to five figures across three
+orders of magnitude, which is why its plateau runs to the top of the ladder.}
 \label{tab:stencil}
 \end{table}
 
@@ -645,25 +657,35 @@ agree with one another} to within a tolerance, and use the geometric middle of t
 details are each necessary, and we record them because the obvious version of the rule fails on
 this suite in three different ways.
 
-\emph{Agreement must be across the run, not between neighbours.} On FitzHugh--Nagumo every
-consecutive change stays under $5\%$ from $h = 0.05$ out to $3.2$ while the curvature drifts from
-$1.145$ to $1.217$; small steps accumulate, and a neighbour test walks steadily off the plateau it
-is meant to find.
+\emph{Agreement must be across the run, not between neighbours.} On FitzHugh--Nagumo in double
+precision every consecutive change stays under $5\%$ from $h = 0.05$ out to $3.2$ while the
+curvature drifts from $1.112$ to $1.176$; small steps accumulate, and a neighbour test walks
+steadily off the plateau it is meant to find.
 
 \emph{The middle of the run, not the top.} The ends of the run are exactly where the estimate
 begins to fail, and both bounds are multiplicative, so the geometric middle maximises the margin
-on either side. Taking the top is measurably worse: the run is located from diagonal probes while
-the Newton also needs off-diagonal ones at $\sqrt2$ times the displacement, and on Lorenz the top
-of the run made those non-finite and cost three quarters of the effective sample size.
+on either side. It matters too that the run is located from diagonal probes while the Newton also
+needs off-diagonal ones at $\sqrt2$ times the displacement, so a step only just inside the run for
+the first can be outside it for the second. This one we must qualify: the measurement behind it was
+Lorenz \emph{before} the hyperparameter fit, where taking the top of the run cost three quarters of
+the effective sample size, and it no longer reproduces---Lorenz's run now ends at $0.8$ and taking
+the top there costs nothing ($67.8\%$ against $67.5\%$). We keep the choice because it is free and
+cannot hurt, not because we can still exhibit a case that needs it.
 
 \emph{A failed probe is not agreement.} Judging coherence on whichever parameters happen to be
-finite silently drops those that failed. On Lorenz the third parameter stops resolving beyond
-$h = 0.8$, and ignoring that extended the apparent plateau to $3.2$---the same collapse again, by a
-different route. A rung counts only if every parameter resolved on it.
+finite silently drops those that failed, and the parameters do not fail together. Hes1 is the live
+case: at $h = 1.6$ its $\theta_5$ probe has already stopped resolving while $\theta_2$, $\theta_3$
+and $\theta_4$ are still moving smoothly, and at $3.2$ three more have gone while those three
+continue. Judged on the survivors the plateau would run to $6.4$, an order of magnitude past the
+point where the parameter with the sharpest profile stopped being measurable at all. A rung counts
+only if every parameter resolved on it.
 
 The cost is $2p$ evaluations per rung, negligible beside the node budget. The selected steps differ
 by more than an order of magnitude across the suite (Table~\ref{tab:chosen}), which is the case for
-selecting rather than setting them.
+selecting rather than setting them. The margin available to a constant is thinner than that number
+suggests: FitzHugh--Nagumo in single precision needs $h \gtrsim 0.4$ before round-off stops
+dominating, and Hes1 needs $h \lesssim 0.4$ before truncation takes over, so the two windows meet
+at a point. A fixed step would have to be that point, and would sit on the edge of both.
 
 \subsection{A gate}
 
@@ -795,7 +817,7 @@ first two. The costs in the last column---between three and twenty-three seconds
 reference chains of roughly two hundred seconds and up.
 
 Lorenz deserves a note, because we previously drew a conclusion from it that was wrong. Before the
-hyperparameter fit its profiled error was $0.34$ against a floor of $4.14$, and we attributed the
+hyperparameter fit its profiled error was $0.34$ where the mode's was $4.14$, and we attributed the
 gap to chaotic dynamics making $p(X\mid\theta)$ strongly non-Gaussian and so undermining the inner
 Laplace approximation \eqref{eq:profile}. That was a plausible mechanism and it was not the one
 operating: with $\phi$ fitted properly the error is $0.0119$, below the floor, and the chaos costs

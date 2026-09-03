@@ -583,3 +583,89 @@ kernel's own length scale matches the target's, rather than the ensemble's — a
 reference-free quantity that tracks the sweep monotonically (0.027 → 0.33 → 0.75 → 0.97 on fn),
 so tuning `h` upward until R ≈ 1 is an obvious and untested procedure.
 
+## 10. Against the literature — and the one-line change that buys 39×
+
+The collapse itself is known. Ba, Erdogdu, Ghassemi, Sun, Suzuki, Wu & Zhang, *Understanding the
+Variance Collapse of SVGD in High Dimensions*, ICLR 2022 (OpenReview `Qycd9j5Qp9J`; there is no
+arXiv version) prove, for an isotropic Gaussian target in the proportional limit
+`n, d → ∞`, `γ = d/n > 1`, Gaussian RBF kernel, under the **plain** median heuristic
+`σ = sqrt(Med{||x_i−x_j||²}/2)`, i.e. `h = 2σ² = Med` with **no** `1/log n` factor:
+
+> **Corollary 4.** `v_SVGD = (e − 1)^{-1} γ^{-1}`, i.e. **0.5820 · n/d**, whereas MMD-descent
+> gives `v_MMD = 1`.
+
+`msvgd.MSVGD.pairwise_distance` implements the *other* convention — Liu & Wang (NeurIPS 2016)
+recommend `h = Med / log n`, and that is what the library uses. So the two laws should differ, and
+`investigation7/exp13_vs_theory.py` runs both conventions through the same harness:
+
+| convention | K | d | γ = d/K | v measured | Ba et al. `0.582 n/d` | this report `ln K / d` |
+|---|---|---|---|---|---|---|
+| Ba (h = Med) | 400 | 800 | 2 | **0.29026** | **0.29099** | 0.00749 |
+| msvgd (h = Med/lnK) | 400 | 800 | 2 | **0.00750** | 0.29099 | **0.00749** |
+| Ba (h = Med) | 400 | 1600 | 4 | **0.14513** | **0.14549** | 0.00374 |
+| msvgd (h = Med/lnK) | 400 | 1600 | 4 | **0.00371** | 0.14549 | **0.00374** |
+| Ba (h = Med) | 200 | 400 | 2 | 0.28953 | 0.29099 | 0.01325 |
+| msvgd (h = Med/lnK) | 200 | 400 | 2 | 0.01325 | 0.29099 | **0.01325** |
+| Ba (h = Med) | 100 | 400 | 4 | 0.14404 | 0.14549 | 0.01151 |
+| msvgd (h = Med/lnK) | 100 | 400 | 4 | 0.01150 | 0.14549 | **0.01151** |
+
+Both laws are confirmed to within 0.3–1%, on the same code, at the same time. That validates the
+harness against published theory, and it isolates a fact worth acting on:
+
+> **The `1/ln K` in `pairwise_distance` costs a factor of `0.582 K / ln K` in variance fidelity.**
+> At K = 400 that is **39×**; at K = 4000 it is 281×. Deleting it — one character class in one
+> line — takes the variance ratio at K = 400, d = 800 from 0.0075 to 0.290.
+
+Both remain `O(1/d)`, so this is not a cure; it is a 39× improvement in the constant, for free,
+and it moves the library from a bandwidth rule nobody has analysed to one that has a theorem
+attached to it.
+
+### Where sections 6 and 9 sit relative to that theory
+
+Ba et al. also test *fixed* bandwidths and conclude against them:
+
+> **Corollary 6** (IMQ kernel): "When σ = √d, `v_SVGD < 1` and is decreasing as γ > 1 increases.
+> When σ = 1, `v_SVGD → 0` … at a rate of `d^{-1/3}`." … "This corollary suggests that the IMQ
+> kernel with fixed bandwidth is not a remedy to the variance collapse problem."
+
+`σ = √d` means `h = 2d` — exactly the bandwidth that would be "correct" if the variance were 1.
+The measurements in sections 6 and 9 do not contradict that, because they are in a regime Ba et
+al. did not test: **h ≈ 100 d**, two orders of magnitude beyond `σ = √d`. The reason that regime
+behaves differently is a two-line expansion. For `k = exp(−||x−y||²/h)` with `h ≫ 2dv`, expanding
+to first order and using `(1/K)Σ_j x_j x_jᵀ ≈ v I` on a centred ensemble,
+
+    phi(x_i)  ≈  −x̄  +  (2/h)(1 − v) x_i  +  O(h^{-2}),
+
+whose fixed point is **v = 1**, approached at rate `2(1 − v)/h`. So a sufficiently large fixed
+bandwidth has the *right* fixed point and merely reaches it slowly — which is exactly the pattern
+measured: correct variance from every start in section 6, and in section 9 a correct answer from a
+well-scaled start but not (within 2000 iterations) from a 4×-too-narrow one.
+
+To my knowledge the following are not in the literature; the search that produced the citations
+above found no source for any of them, and they should be treated as this report's own
+measurements rather than as established results:
+
+* the `ln(K)/d` law for the `h = Med/log n` convention, and the 39× penalty it carries against
+  the plain median heuristic;
+* the observation that the median heuristic's equilibrium pins `h → 2` in units where the target
+  has unit variance (`exp08` measures 1.79–2.26 across d = 50–325 and K = 10–3200);
+* that a fixed `h ≳ 100 d` restores the variance to 0.93–0.99 and the *energy distance* to below
+  the K-particle Monte-Carlo floor, in d = 325 and on the real MAGI posteriors.
+
+Other relevant references, for the record: Zhuo et al., *Message Passing SVGD*, ICML 2018
+(arXiv:1711.04425) prove only repulsive-force decay, not the variance claim they are usually cited
+for; Korba et al., NeurIPS 2020 (arXiv:2006.09797) give mean-field rates only; Priser, Bianchi &
+Salim, ICLR 2025 (arXiv:2406.11929) show *noisy* SVGD provably avoids the collapse; Liu & Wang,
+*SVGD as Moment Matching*, NeurIPS 2018 (arXiv:1810.11693) show SVGD with **linear** kernels
+estimates Gaussian means and variances exactly — i.e. the collapse belongs to the RBF/median
+setup, not to SVGD's fixed-point structure.
+
+On the density-reweighted kernel: Huang, Dong & Fang (OpenReview `k2CRIF8tJ7Y`) was **rejected**
+from ICLR 2023 (scores 3/6/8), no reviewer raised variance or dispersion, and no source claims it
+mitigates variance collapse. Its better ranking here (`≈20/d` against `ln K/d`) is an empirical
+observation of this report, not a published property. The nearest published analogue is
+h-SVGD, *Convergence Aspects of Hybrid Kernel SVGD*, TMLR 2025 (OpenReview `JZkbMSQDmD`), which
+uses different kernels in the drift and repulsion terms, improves variance empirically, and
+**proves it does not converge to the target in the mean-field limit** — a useful reminder that
+"fixes the variance" and "has a convergence guarantee" are independent claims here.
+

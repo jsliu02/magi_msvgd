@@ -12,3 +12,5 @@ chain-to-chain floor 0.0100
             joint Laplace    2.0%    0.41    101905.3      64
      hiv         profiled   63.4%   -0.37         6.8       0
             joint Laplace   62.6%   -0.34         7.2       0
+  lorenz         profiled   67.5%    0.26        17.5       0
+            joint Laplace    2.4%    0.47        18.5       0

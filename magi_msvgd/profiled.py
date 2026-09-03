@@ -143,11 +143,13 @@ class ProfiledPosterior:
         derivative, and round-off error falling like sigma / h^2. So h is bounded on both sides,
         and both bounds are properties of the problem: sigma comes from the working precision and
         the fourth derivative from how non-Gaussian the profiled marginal is. Measured across the
-        test systems the two windows do not even overlap. FitzHugh-Nagumo in float32 needs h of at
-        least 0.2 standard deviations before the curvature stops being noise -- at h = 0.01 it
-        comes out NEGATIVE -- while Hes1 needs at most about 0.05 before truncation bends it by
-        tens of percent, its curvature drifting from 35.5 to 12.2 across the ladder. No constant
-        is safe for both, which is the argument for choosing h instead of setting it.
+        test systems the two windows barely meet. FitzHugh-Nagumo in float32 needs h of at least
+        about 0.4 standard deviations before round-off stops dominating -- at h = 0.05 its third
+        parameter's curvature comes out NEGATIVE -- while Hes1 needs at most about 0.4 before
+        truncation takes over, its theta_5 curvature having already moved 12% by h = 0.8 and its
+        probes failing outright beyond 1.6. A constant would have to be that single point and
+        would sit on the edge of both windows, which is the argument for choosing h rather than
+        setting it.
 
         The diagnostic is agreement: over a plateau the estimate does not move with h, and outside
         one it does. The diagonal curvature is evaluated along a ladder and the LARGEST h whose
@@ -178,14 +180,15 @@ class ProfiledPosterior:
                     curv[i, j] = -(a - 2 * f0 + b) / h[j] ** 2 * sd0[j] ** 2
         # A run, not a neighbour. Requiring only that consecutive rungs agree lets the estimate
         # walk: on FitzHugh-Nagumo every consecutive change stays under 5% from h = 0.05 to 3.2
-        # while the curvature drifts 1.145 -> 1.217, because small steps accumulate. So the
+        # while the curvature drifts 1.112 -> 1.176, because small steps accumulate. So the
         # plateau is the longest CONTIGUOUS run of rungs that all agree with one another, and the
         # step taken is the largest h inside it.
         # A rung counts only if EVERY parameter resolved on it. Judging agreement on whichever
         # parameters happen to be finite silently drops the ones that failed, which is how a plateau
-        # gets reported past its real end: on Lorenz the probes for the third parameter stop
-        # resolving beyond h = 0.8, and ignoring that extended the apparent run to 3.2 and cost
-        # three quarters of the effective sample size.
+        # gets reported past its real end -- and the parameters do not fail together. On hes1 the
+        # theta_5 probe stops resolving at h = 1.6 while theta_2, theta_3 and theta_4 are still
+        # moving smoothly, and by 3.2 three more have gone while those three continue; judged on
+        # the survivors the run would extend to 6.4.
         valid = np.all(np.isfinite(curv), axis=1)
 
         def coherent(i, j):
@@ -209,10 +212,15 @@ class ProfiledPosterior:
             # The MIDDLE of the plateau, not its top. The run's ends are exactly where the estimate
             # starts to fail -- round-off below, truncation above -- and both bounds are
             # multiplicative, so the geometric middle is the point of greatest margin on either
-            # side. Taking the top instead is measurably worse: the run is found from DIAGONAL
-            # probes, while the Newton also needs off-diagonal ones at sqrt(2) times the
-            # displacement, and on Lorenz the top of the run (3.2) makes those probes non-finite
-            # and drops the effective sample size from 76% to 8%.
+            # side. It also matters that the run is found from DIAGONAL probes while the Newton
+            # needs off-diagonal ones at sqrt(2) times the displacement, so a step that is only
+            # just inside the run for the former can be outside it for the latter.
+            # Caveat on the evidence: the measurement that motivated this was Lorenz before the GP
+            # hyperparameter fit, where the top of the run (3.2) made the off-diagonal probes
+            # non-finite and dropped the effective sample size from 76% to 8%. That no longer
+            # reproduces -- Lorenz's run now ends at 0.8, and taking the top there costs nothing
+            # (67.8% against 67.5% at the middle). The argument is kept because it is cheap and
+            # cannot hurt, not because we can currently exhibit a case where it is needed.
             pick = float(lad[int(np.argmin(np.abs(np.log(lad) - 0.5 * np.log(lo * hi))))])
             self.fd_run = (lo, hi)
         else:

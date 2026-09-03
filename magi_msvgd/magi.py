@@ -967,8 +967,10 @@ class MAGI:
                     deterministic given `seed`
         inner_iters Gauss-Newton iterations for the inner profile. Three suffices because every
                     node is warm-started from the implicit-function prediction
-                    X_MAP + (dX*/dtheta)(theta - theta_MAP) rather than from X_MAP; without that
-                    prediction the same accuracy needs six.
+                    X_MAP + (dX*/dtheta)(theta - theta_MAP) rather than from X_MAP. Measured on
+                    FitzHugh-Nagumo the predictor reaches the reference floor at two iterations
+                    where starting from X_MAP needs four, so the default carries one iteration of
+                    margin over what the measurement requires.
         map_kwargs  forwarded to the Gauss-Newton mode solve (tol, max_iter, check, ...)
 
         Single precision is fine. The importance weights are barely affected by it -- the spread
