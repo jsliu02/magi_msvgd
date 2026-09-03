@@ -1,0 +1,14 @@
+=== (a) warm start, FitzHugh-Nagumo ===
+         start      2 inner iters      4 inner iters      8 inner iters
+         X_MAP    0.0262 / 52.6 s    0.0058 / 65.3 s    0.0121 / 85.4 s
+     predictor    0.0120 / 39.9 s    0.0127 / 52.4 s    0.0128 / 89.0 s
+chain-to-chain floor 0.0100
+
+=== (b) proposal: joint Laplace marginal vs profiled ===
+  system         proposal      ESS    khat   logw span  failed
+      fn         profiled   75.7%   -0.56        11.8       0
+            joint Laplace   35.0%   -0.10        10.7       0
+    hes1         profiled   21.1%   -0.06   2362856.0      93
+            joint Laplace    2.0%    0.41    101905.3      64
+     hiv         profiled   63.4%   -0.37         6.8       0
+            joint Laplace   62.6%   -0.34         7.2       0

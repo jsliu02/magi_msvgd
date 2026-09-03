@@ -151,25 +151,29 @@ Jacobian assembly rather than $d$ autodiff passes. The fourth block is linear, s
 The solver forms $A = J^\top J$ and factorises it, which is far faster than a QR least-squares
 solve and squares $\kappa(J)$. Whether that matters is not a property of the science but of the
 units. Table~\ref{tab:cond} shows what happens on HIV, whose parameters
-$\theta = (36, 0.108, 0.5, 1000, 3)$ are rate constants on different scales: the $\theta$-block
-curvature spans $3\times10^{-6}$ to $5\times10^{2}$, $\kappa(A)$ reaches $4\times10^{17}$, and the
-Cholesky is meaningless.
+$\theta = (36, 0.108, 0.5, 1000, 3)$ are rate constants on different scales: the diagonal of $A$
+spans $5\times10^{-2}$ to $7\times10^{5}$ on the $\theta$ block alone, $\kappa(A)$ reaches
+$5.6\times10^{10}$, and one symmetric diagonal scaling takes it to $4.0\times10^{2}$.
 
 \begin{table}[t]
 \centering\small
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
-& $\kappa(A)$ & $\kappa(DAD)$ & unscaled $\|\nabla\log p\|$ & scaled $\|\nabla\log p\|$ & unscaled s & scaled s\\
+& $\kappa(A)$ & $\kappa(DAD)$ & gain & $\operatorname{diag}(A)$ on the $\theta$ block\\
 \midrule
-fn     & 4.4e3 & 3.9e3 & 2.2e-07 & 2.8e-07 & 2.00 & \textbf{1.31}\\
-hes1   & 2.2e3 & 1.0e2 & \textbf{3.8e-12} & 3.9e-09 & 1.82 & \textbf{1.21}\\
-hiv    & \textbf{4.1e17} & \textbf{8.4e10} & \textbf{1.7e-02} & \textbf{6.3e-09} & 3.40 & \textbf{2.38}\\
-lorenz & 9.6e4 & 7.5e3 & 4.1e-09 & 4.3e-08 & 1.77 & \textbf{1.26}\\
+fn     & 4.4e3 & 3.9e3 & $1.2\times$ & 3e3 -- 5e3\\
+lorenz & 1.1e5 & 5.0e3 & $23\times$ & 8e1 -- 1e3\\
+hes1   & 2.1e9 & 1.8e5 & $1.2\times10^{4}$ & 1e2 -- 3e7\\
+hiv    & \textbf{5.6e10} & \textbf{4.0e2} & $\mathbf{1.4\times10^{8}}$ & 5e-2 -- 7e5\\
 \bottomrule
 \end{tabular}
-\caption{Symmetric diagonal scaling of the Gauss--Newton solve. Seven orders of magnitude where
-the parameters are in mixed units; slightly worse where they are not, though every value there is
-far below any tolerance a user would set.}
+\caption{Symmetric diagonal scaling of the Gauss--Newton normal equations, at the mode, in double
+precision. The gain tracks the spread of the diagonal, as it must: eight orders on HIV, whose
+parameters are rate constants in mixed units, and essentially nothing on FitzHugh--Nagumo, whose
+three are all $O(1)$. These figures are from after the hyperparameter fit of
+Section~\ref{sec:gp}; before it HIV read $\kappa(A) = 4\times10^{17}$, which we had presented as
+the motivating case. The motivation is weaker than we thought and the conclusion is unchanged---the
+scaling costs one line and is never harmful.}
 \label{tab:cond}
 \end{table}
 
@@ -216,27 +220,42 @@ suite in $6$ to $35$ iterations where an absolute tolerance ran to the cap:
 & \multicolumn{2}{c}{fn} & \multicolumn{2}{c}{hes1} & \multicolumn{2}{c}{hiv} & \multicolumn{2}{c}{lorenz}\\
 & f64 & f32 & f64 & f32 & f64 & f32 & f64 & f32\\
 \midrule
-iterations & 20 & 22 & 14 & 14 & 6 & 9 & 35 & 31\\
-$\lambda_{\mathrm{N}}$ & 1.1e-3 & 5.6e-3 & 4.5e-9 & 4.2e-6 & 1.2e-5 & $\infty$ & 4.7e-4 & 1.6e-3\\
-$\|\nabla\log p\|$ & 2.7e-3 & 1.5e-2 & 3.9e-9 & 7.9e-6 & 1.9e-3 & 2.1e0 & 2.1e-4 & 8.9e-4\\
+iterations & 17 & 15 & 16 & 42 & 4 & 4 & 31 & 37\\
+$\lambda_{\mathrm{N}}$ & 6.3e-4 & 1.7e-3 & 2.0e-4 & 2.2e-4 & 6.7e-6 & 5.7e-4 & 8.8e-4 & 3.9e-3\\
+$\|\nabla\log p\|$ & 2.6e-3 & 1.0e-2 & 1.1e-2 & 8.4e-2 & 3.7e-4 & 3.6e-2 & 5.1e-4 & 5.2e-3\\
 \bottomrule
 \end{tabular}
 \end{center}
 
 A scale-free tolerance still has a precision floor, so the iteration also stops on stagnation;
 otherwise float32 spends its remaining budget whenever the requested tolerance happens to sit
-below what the format can deliver. The entry $\lambda_{\mathrm{N}} = \infty$ for HIV in float32 is
-not a failure to converge---the mode it returns matches the float64 one to three decimals in
-$\log p$---but a refusal to certify: at $\kappa(A) = 4\times10^{17}$ in single precision the
-decrement cannot be computed reliably, and reporting that is more useful than reporting a number.
+below what the format can deliver. The table makes the case for reporting $\lambda_{\mathrm{N}}$
+rather than $\|\nabla\log p\|$ in one line: read the gradient norms alone and Hes1 in float32
+($8.4\times10^{-2}$) looks like the worst-converged run in the suite by two orders of magnitude,
+while its decrement, $2.2\times10^{-4}$, is the second best. The gradient norm is reporting the
+units of Hes1's $\theta$ block, whose curvature spans $10^{2}$ to $10^{7}$; the decrement divides
+them out.
+
+Every entry here reaches the tolerance, including HIV in float32, which until recently could not
+run in single precision at all. Its GP covariances factored to NaN, so every residual for two of
+its three components was NaN before the first step. The cause was a fixed $10^{-12}$ relative
+ridge on the Cholesky---about $4500$ times float64's epsilon, and five orders \emph{below}
+float32's, so in single precision it was not representable against the diagonal it was meant to
+lift. Once the hyperparameters were fitted correctly HIV's $C^{-1}$ had condition $1.3\times10^{9}$
+and that was enough to expose it. The ridge now follows the dtype. It is the same error as
+everywhere else in this paper, in its purest form: a constant that had been calibrated against one
+scale and was being applied to another.
 
 \begin{remark}[A recurring theme]
-This is the fourth place in this paper where a quantity with units was being compared against an
+This is the fifth place in this paper where a quantity with units was being compared against an
 absolute threshold, after the conditioning of the normal equations (Section~\ref{sec:solver}), the
-detection of flat directions (Section~\ref{sec:diagnosis}) and the finite-difference step
-(Section~\ref{sec:stencil}). In each case the fix is to divide by the relevant scale---the diagonal
-of $A$, the diagonal of $H$, the posterior standard deviation---and in each case the unscaled
-version worked on the benchmark it was developed on and failed elsewhere.
+detection of flat directions (Section~\ref{sec:diagnosis}), the finite-difference step
+(Section~\ref{sec:stencil}) and the Cholesky ridge just above. Two more follow: the agreement test
+between restarts (Section~\ref{sec:diagnosis}) and, worst of all, the starting point of the
+hyperparameter optimiser (Section~\ref{sec:gp}). In each case the fix is to divide by the relevant
+scale---the diagonal of $A$, the diagonal of $H$, the posterior standard deviation, machine
+epsilon, the data's own variance---and in each case the unscaled version worked on the benchmark
+it was developed on and failed elsewhere.
 \end{remark}
 
 \section{The missing prior}
@@ -650,10 +669,16 @@ selecting rather than setting them.
 
 Importance sampling at a few percent effective sample size is not an estimate. We require
 $\mathrm{ESS} \ge 10\%$ and $\khat < 0.7$, both computable without a reference, and otherwise
-report the Laplace approximation. This is not a formality: on Hes1, where no parameter is
-identified, the mode's parameter error is $0.0126$ against a floor of $0.0181$---the mode is
-already at the reference mean---while the profiled estimate is substantially worse. Where nothing
-is identified the Laplace approximation is the correct answer and the method must say so.
+report the Laplace approximation.
+
+We should be candid that the gate no longer fires on this suite in double precision: after the
+hyperparameter fit all four systems pass it, Hes1 least comfortably at $21\%$. Its one live decline is Hes1 in float32, at
+$\mathrm{ESS} = 2.3\%$. The case that used to justify it---a
+posterior where nothing was identified, the mode already sat at the reference mean, and profiling
+made matters worse---was an artifact of the broken hyperparameters and no longer exists. We keep
+the gate because the failure it guards against is real and cheap to check for, not because we can
+still exhibit it; a reader should weigh it as a safeguard of unproven necessity rather than as a
+demonstrated one.
 
 \begin{algorithm}[t]
 \DontPrintSemicolon
@@ -801,7 +826,17 @@ What was actually failing was the finite-difference stencil. A central second di
 $h^2$, so at $h = 0.02\,\mathrm{sd}$ the $0.007$ nats of round-off become an amplification of
 roughly $2500$ and the curvature estimate is noise---on FitzHugh--Nagumo it comes out
 \emph{negative}. With the step chosen as in Section~\ref{sec:stencil} rather than fixed, single
-precision matches double everywhere and is consistently faster (Table~\ref{tab:chosen}).
+precision matches double on FitzHugh--Nagumo and Lorenz and beats it on HIV, in every case by
+selecting a step an octave or two larger to stay clear of its own round-off floor
+(Table~\ref{tab:chosen}).
+
+The exception is Hes1, and it is a real one: single precision takes its effective sample size from
+$21\%$ to $2.3\%$ and the gate declines. This is not the stencil---both precisions pick a step
+inside the same plateau---but the funnel of Section~\ref{sec:funnel} interacting with the ridge the
+Cholesky needs in float32, which is $4.9\times10^{-4}$ relative against $9\times10^{-13}$ in
+float64. On a posterior whose curvature varies by six orders of magnitude that ridge is not
+uniformly negligible. The honest summary is therefore narrower than we first wrote it: use single
+precision, and expect the gate to catch the case where it is not enough.
 
 \begin{table}[t]
 \centering\small
@@ -810,16 +845,19 @@ precision matches double everywhere and is consistently faster (Table~\ref{tab:c
 system & \multicolumn{2}{c}{chosen $h/\mathrm{sd}$} & \multicolumn{2}{c}{plateau} & \multicolumn{2}{c}{ESS}\\
 & f64 & f32 & f64 & f32 & f64 & f32\\
 \midrule
-fn     & 0.1  & 0.8 & 0.01--1.6 & 0.4--1.6  & 75.7\% & 76.4\%\\
-hes1   & 0.02 & 0.02 & 0.01--0.05 & 0.01--0.05 & 0.4\% & 0.4\%\\
-hiv    & 0.1  & 0.4 & 0.01--1.6 & 0.1--1.6  & 2.6\% & 3.5\%\\
-lorenz & 0.1  & 0.4 & 0.01--0.8 & 0.2--0.8  & 75.5\% & 76.0\%\\
+fn     & 0.1  & 1.6  & 0.01--1.6  & 0.4--6.4$^\ast$  & 75.7\% & 75.8\%\\
+hiv    & 0.2  & 1.6  & 0.01--6.4$^\ast$ & 0.4--6.4$^\ast$ & 63.4\% & 79.4\%\\
+lorenz & 0.1  & 0.4  & 0.01--0.8  & 0.2--0.8   & 67.5\% & 72.4\%\\
+hes1   & 0.05 & 0.1  & 0.01--0.4  & 0.02--0.4  & 21.1\% & \textbf{2.3\%}\\
 \bottomrule
 \end{tabular}
-\caption{Steps selected automatically, and the plateaus they were selected from. The lower edge
-moves with precision (fn: $0.01$ in double, $0.4$ in single) because round-off sets it; the upper
-edge does not (hes1 at $0.05$, lorenz at $0.8$) because truncation and probe failure set it. The
-rule reads both without being told which regime it is in.}
+\caption{Steps selected automatically, and the plateaus they were selected from, after the
+hyperparameter fit of Section~\ref{sec:gp}. The lower edge moves with precision---FitzHugh--Nagumo
+$0.01$ in double against $0.4$ in single---because round-off sets it; the upper edge does not
+(Lorenz at $0.8$, Hes1 at $0.4$) because truncation and probe failure set it. The rule reads both
+without being told which regime it is in. $^\ast$The plateau runs to the top of the ladder, so its
+upper edge is the ladder's and not the problem's; the step taken is the geometric middle either
+way.}
 \label{tab:chosen}
 \end{table}
 
@@ -984,14 +1022,17 @@ instructive: it did not make the method fail, it made it succeed at fitting the 
 and every certificate we had built agreed that the fit was good. What caught it was plotting the
 trajectories.
 
-A pattern runs through all of them. Five separate quantities in this pipeline were being compared
+A pattern runs through all of them. Seven separate quantities in this pipeline were being compared
 against absolute thresholds while carrying units: the conditioning of the normal equations, the
-eigenvalues used to detect flat directions, the finite-difference step, the convergence test, and
-the agreement test between restarts. Each worked on the problem it was developed on and failed on
-another, and in every case the repair was the same---divide by the scale that the quantity is
-measured in, and the threshold becomes a statement about the posterior rather than about the
-units. It is a dull principle, and it accounted for more of the difficulty here than any of the
-approximation theory.
+eigenvalues used to detect flat directions, the finite-difference step, the convergence test, the
+agreement test between restarts, the ridge added before a Cholesky, and the starting point of the
+hyperparameter optimiser. Each worked on the problem it was developed on and failed on another,
+and in every case the repair was the same---divide by the scale that the quantity is measured in,
+and the threshold becomes a statement about the posterior rather than about the units. It is a
+dull principle, and it accounted for more of the difficulty here than any of the approximation
+theory. The last of the seven is the one to remember, because it did not announce itself as a
+numerical problem at all: it produced a posterior that was internally consistent, passed every
+certificate we had, and answered a different question than the one asked.
 
 \begin{thebibliography}{9}
 \small

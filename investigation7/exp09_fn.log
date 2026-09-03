@@ -1,0 +1,5 @@
+
+===== fn  p=3  K=64  maxit=400 =====
+                         variant  thEnergy  x floor    thErr   sdrat     sec
+           fit() [the incumbent]   0.07579     2.52   0.2389   1.091    95.7
+      START: Laplace theta draws   0.64403    21.37   1.1897   0.907     0.0

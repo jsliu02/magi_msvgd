@@ -363,9 +363,12 @@ class ProfiledPosterior:
         self.khat = _pareto_k(np.exp(lr[np.isfinite(lr)]))
         self.log_ratio = lr
         # Reference-free gate. Importance sampling with an effective sample size of a few percent
-        # is not an estimate, and on Hes1 -- where no parameter is identified and the mode already
-        # sits at the reference mean -- the profiled answer is worse than doing nothing. Below the
-        # threshold the caller is told to use the Laplace approximation instead.
+        # is not an estimate, so below the threshold the caller is told to use the Laplace
+        # approximation instead. Note that with the GP hyperparameters fitted correctly this no
+        # longer fires on any of the test systems in float64 -- its one live decline is hes1 in
+        # float32, at ESS 2.3%. The case that used to justify it, a posterior in which nothing was
+        # identified, was an artifact of the hyperparameter bug. It is kept as a safeguard whose
+        # necessity is unproven rather than one that has been demonstrated here.
         self.reliable = bool(self.ess / self.n_nodes >= 0.10
                              and np.isfinite(self.khat) and self.khat < 0.7
                              and getattr(self, "mode_ok", True))

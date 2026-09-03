@@ -477,6 +477,8 @@ are not.
 | **hiv** | `fit()` | **0.111** | **0.0148** | 1.000 | **0.096** | 334 |
 | | adam 0.1, K = 200, 2000 it | 20.36 | 5.076 | 0.007 | 3.728 | 31 |
 | | prodigy, K = 200, 2000 it | 18.66 | 5.017 | 0.010 | 3.650 | 25 |
+| | prodigy, mitosis 50→100→200 | 19.49 | 4.663 | 0.013 | 3.683 | 22 |
+| | prodigy, K = 400, 5000 it | 16.79 | 15.25 | 2.738 | 2.726 | 198 |
 | | *floor / NUTS* | *0.108* | *0.0056* | *1.000* | *0.008* | *252* |
 
 Three things worth saying plainly.
@@ -487,7 +489,9 @@ Three things worth saying plainly.
 * **Mitosis does not help, and neither does more of anything.** 50→100→200 with splits scores the
   same as 200 flat; 400 particles for 5000 iterations (10× the compute) scores the same as 200 for
   2000. The law of section 5 says why: the equilibrium moves as `ln K`, so doubling the particles
-  buys 15%.
+  buys 15%. On HIV the longest run is the only one that does not simply collapse, and it goes the
+  other way instead — Stein R 2.74, 15× too much variance in the stiffest band, θ energy 15.2
+  against 5.0 for the short runs. Longer is not better there either.
 * **The cost argument is not there either.** mSVGD is not faster than `fit()`, which is 60–190×
   more accurate, and it is within a factor of 5 of the *reference chain itself* — 96,000 NUTS
   draws in 116–252 s. On these problems, at this dimension, there is no budget at which mSVGD is
@@ -517,4 +521,65 @@ The GP bug and the integrator, which invalidated most of investigations 5 and 6,
 on this one. `investigation7/exp05_whatchanged.py` runs the 2×2 of {rk4, euler} × {fixed GP, old
 GP} explicitly; the reproduction above already answers the question, so exp05 is confirmation
 rather than evidence.
+
+## 9. Does the bandwidth fix transfer to the real posteriors? Mostly — with one condition.
+
+`investigation7/exp12_bandwidth_magi.py`. Same fixed-point setup as section 3 (K = 400 started at
+`fit()` draws), but with the bandwidth held at multiples of `h0`, the median heuristic evaluated
+**on the `fit()` ensemble** — which is a quantity a user actually has, unlike section 6's `h*`.
+2000 iterations. Each setting is also run from the same ensemble shrunk 4× about its mean, so
+"converged there" and "stayed where it started" remain distinguishable.
+
+FitzHugh–Nagumo, `h0 = 0.402`:
+
+| variant | energy | thEnergy | Stein R | max\|θ err\| | band profile |
+|---|---|---|---|---|---|
+| start: fit() draws | 0.137 | 0.0087 | 1.250 | 0.077 | 0.98 0.98 1.03 1.01 1.03 |
+| start: shrunk 0.25× | 5.435 | 0.461 | 0.064 | 0.077 | 0.06 ×5 |
+| h = 1·h0 (≈ the default) | 6.322 | 0.619 | 0.027 | 1.013 | 0.19 0.009 0.002 0.001 0.001 |
+| h = 10·h0 | 1.449 | 0.102 | 0.326 | 0.460 | 0.86 0.47 0.36 0.07 0.01 |
+| h = 100·h0 | 0.194 | 0.0052 | 0.754 | 0.050 | 0.88 0.78 0.79 0.66 0.59 |
+| **h = 1000·h0** | **0.069** | 0.0351 | **0.966** | 0.256 | 0.93 0.89 0.93 0.90 0.89 |
+| h = 1000·h0, from 0.25× start | 5.399 | 1.008 | 0.067 | 0.936 | 0.07 ×5 |
+| **FLOOR: 400 exact draws** | **0.082** | **0.0055** | **1.000** | **0.010** | ~1.00 |
+
+Lorenz, `h0 = 135.4`:
+
+| variant | energy | thEnergy | Stein R | max\|θ err\| | band profile |
+|---|---|---|---|---|---|
+| start: fit() draws | 0.097 | 0.0113 | 1.017 | 0.071 | ~1.00 |
+| h = 1·h0 | 5.325 | 1.034 | 0.032 | 1.723 | 0.28 0.024 0.008 0.037 0.004 |
+| h = 10·h0 | 1.569 | 0.280 | 0.277 | 1.070 | 0.92 0.37 0.20 0.42 0.07 |
+| h = 100·h0 | 0.110 | 0.0128 | 0.801 | 0.191 | 0.96 0.82 0.77 0.80 0.72 |
+| **h = 1000·h0** | **0.052** | 0.0090 | **0.944** | 0.106 | 0.97 0.93 0.92 0.94 0.93 |
+| h = 1000·h0, from 0.25× start | 5.215 | 0.992 | 0.066 | 1.081 | 0.06 ×5 |
+| **FLOOR: 400 exact draws** | **0.078** | **0.0045** | **1.000** | **0.041** | ~1.00 |
+
+**The fix transfers.** At 1000× the default bandwidth, mSVGD on the actual 306- and
+325-dimensional MAGI posteriors reaches an energy distance of 0.052 and 0.069 against K = 400
+floors of 0.078 and 0.082 — **below the floor on both**, i.e. indistinguishable from 400 exact
+draws, or slightly better as a quasi-uniform ensemble should be. Stein R goes from 0.03 to 0.94
+and 0.97. The band profile is flat at 0.89–0.97 instead of collapsing three orders of magnitude.
+Anisotropy is evidently not the obstacle it looked like: one scalar bandwidth, if large enough,
+serves posteriors whose contraction rates differ 27-fold across bands.
+
+**The condition is the starting ensemble.** Every `0.25×` row fails: at h = 1000·h0 the repulsion
+term carries a factor `2/h`, so an ensemble that starts too narrow expands far too slowly to
+recover in 2000 iterations (in the isotropic case of section 6, 5000 iterations were enough). So
+this is not a standalone sampler at these settings; it is a *refinement of an ensemble that is
+already about the right size* — which `fit()` provides, in 9–29 s.
+
+**And it does not beat `fit()` where it matters.** The full-dimensional energy improves on the
+start (0.137 → 0.069 on fn, 0.097 → 0.052 on lorenz), but the θ block gets *worse*: θ energy
+0.0087 → 0.0351 on fn, max |θ err| 0.077 → 0.256 against a floor of 0.010. On lorenz θ is roughly
+unchanged. So the honest summary is: with a hand-tuned bandwidth 1000× the library default,
+mSVGD can polish `fit()`'s state block to below the Monte-Carlo floor while slightly degrading its
+parameters, for 30–40 s. Whether that is worth anything depends on wanting the states rather than
+the parameters.
+
+**How the multiplier would be chosen without a reference is not settled.** 1000× was found by a
+sweep scored against the reference. Section 6 gives a principled candidate — pick `h` so that the
+kernel's own length scale matches the target's, rather than the ensemble's — and Stein R is a
+reference-free quantity that tracks the sweep monotonically (0.027 → 0.33 → 0.75 → 0.97 on fn),
+so tuning `h` upward until R ≈ 1 is an obvious and untested procedure.
 
