@@ -1,0 +1,486 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.05in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,citecolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\khat}{\widehat{k}}
+\newcommand{\Rhat}{\widehat{R}}
+
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{\bfseries Three obstructions to Stein variational gradient descent\\[2pt]
+on a MAGI posterior}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Stein variational gradient descent (SVGD) is an attractive candidate for MAGI \cite{yang2021}
+posteriors: it is deterministic, it parallelises trivially, and it needs only the score. We spent
+four investigations on it and recommend against it. This report sets out why, because the reasons
+are more interesting than the verdict and two of them are not specific to MAGI.
+
+There are three obstructions, and each would be sufficient alone. First, the variance collapse is
+dimensional. On these problems $d$ runs from $106$ to $608$, and the equilibrium variance ratio
+under the median-heuristic bandwidth is $\ln K/d$ --- measured to three decimals over $d \in
+[50, 608]$ and $K \in [10, 3200]$ --- so correct dispersion needs $K \sim e^{d}$. Ba et
+al.\ \cite{ba2022} prove the $\Theta(1/d)$ scaling; the $\ln K$ numerator is an artifact of the
+$1/\log K$ factor that implementations following Liu and Wang \cite{liu2016} apply, and dropping it
+is worth a factor of $0.582K/\ln K$, or $39$ at $K = 400$. Second, that obstruction \emph{is}
+removable: at a large fixed bandwidth in coordinates whitened by the Laplace metric, SVGD has a
+genuine attractor, the residual error is a pure scale deficit, and the Stein identity measures that
+deficit without a reference --- rescaling by $1/\sqrt{R}$ brings the ensemble to $0.57$ to $0.96$
+times the reference chain's own agreement floor. Third, and fatally, the fixed point so obtained is
+displaced in the \emph{parameters}, along the axis from the joint mode to the posterior mean, by
+that axis's own length. It is exact for a Gaussian target and biased for anything else. That
+displacement is precisely the correction the deterministic pipeline exists to compute, so SVGD
+returns the quantity being estimated.
+
+We also report a bug of our own that invalidated an earlier verdict on preconditioning, two of our
+own hypotheses that measurement overturned, and the three things from this work worth keeping: the
+$1/\log K$ deletion, the Stein dispersion ratio as a diagnostic, and the design rule
+$K \gtrsim e^{p}$ for SVGD on a $p$-dimensional marginal.
+\end{abstract}
+
+\section{What would count as success}
+\label{sec:setting}
+
+MAGI places a Gaussian process prior on each state component of $\dot x = f(x,\theta)$ and
+constrains it to satisfy the dynamics on a discretisation grid. The unknown is
+$x = (\theta, X) \in \R^{d}$ with $d = p + nD$; across the four systems we use, $d$ runs from
+$106$ to $608$ and $p$ from $3$ to $7$. Almost all of the dimension is state.
+
+Three of the four systems have a usable reference: $32$ preconditioned NUTS chains, $96{,}000$
+draws, $\Rhat \le 1.007$. Hes1 does not --- $\Rhat = 1.76$ with $13\%$ divergences --- and is
+excluded from every quantitative statement here, because without a reference nothing measured on it
+can be scored.
+
+Scoring is by energy distance in Mahalanobis coordinates, always reported against its own
+\textbf{floor}: the same statistic between two independent subsamples of the reference at the
+ensemble's particle count. A value of $1.0\times$ the floor means the ensemble is as close to the
+reference as the reference is to itself, which is the most a finite reference can establish.
+Marginal standard deviations are \emph{not} used as a score, and this is the specific trap the
+problem sets: an early run held every marginal sd at $0.991$ of the reference --- visually perfect
+credible intervals --- while sitting $45\times$ the energy floor from the target. SVGD's collapse
+is anisotropic and no marginal sees it.
+
+The incumbent is the deterministic pipeline of \cite{companion2}: profile the states out by Laplace
+at each $\theta$, integrate the $p$-dimensional remainder by importance sampling. It reaches the
+reference's own agreement floor on all three scorable systems --- largest parameter error $0.0126$
+against a floor of $0.0100$, $0.0093$ against $0.0081$, $0.0119$ against $0.0405$ --- in four to
+six seconds. Any case for SVGD has to be made against that.
+
+\section{Obstruction 1: the collapse is dimensional}
+\label{sec:dim}
+
+\subsection{The original observation, and the control that explains it}
+
+Started \emph{at} a correct posterior sample on FitzHugh--Nagumo and run, SVGD moves away from it:
+the energy distance degrades from $0.085$ to $6.89$ under the standard RBF kernel and $3.80$ under
+the density-reweighted kernel of \cite{huang2023}, and the Stein-identity ratio falls from $1$ to
+$0.019$ and $0.24$. Since the starting point was correct, the motion is unambiguously away from it.
+
+We re-ran that after correcting a Gaussian-process hyperparameter fit and changing the benchmark
+integrator from forward Euler to RK4, expecting the numbers to move. They do not: the standard
+kernel reproduces to three significant figures (energy $6.895 \to 6.847$, Stein $0.0190 \to
+0.0194$), and the explicit $2\times2$ of $\{$RK4, Euler$\}\times\{$fixed, old$\}$ hyperparameters
+gives Stein $0.0192$ to $0.0194$ in every cell. Neither correction has any bearing on it.
+
+The reason they have no bearing is that the effect is not a property of the MAGI posterior at all.
+The control that settles it is embarrassingly simple and had not been run: SVGD on
+$\mathcal N(0, I_{325})$, started at exact draws. It collapses to a flat $1.8\%$ of the correct
+variance --- $89\times$ the floor, the same as on the real posterior. No MAGI, no anisotropy, no
+non-Gaussianity.
+
+\subsection{The law}
+
+Sweeping $d$ and $K$ on isotropic Gaussian targets, started at exact draws so there is no burn-in
+to mistake for an equilibrium, the mean variance ratio times $d$ collapses onto a function of $K$
+alone:
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{lrrrr}
+\toprule
+$d \backslash K$ & 50 & 100 & 400 & 1600\\
+\midrule
+50   & 3.915 & 4.512 & 5.452 & 8.602\\
+100  & 3.912 & 4.605 & 5.774 & 7.924\\
+200  & 3.912 & 4.582 & 5.914 & 7.756\\
+325  & 3.917 & 4.601 & 5.956 & 8.072\\
+608  & 3.890 & 4.605 & 5.978 & 7.469\\
+\midrule
+$\ln K$ & \textbf{3.912} & \textbf{4.605} & \textbf{5.991} & \textbf{7.378}\\
+\bottomrule
+\end{tabular}
+\caption{$d \cdot \Var_{\mathrm{SVGD}}/\Var_{\mathrm{target}}$ against $\ln K$, standard RBF kernel
+under the median heuristic with the $1/\log K$ factor. Prodigy, $2000$ iterations, started at exact
+draws.}
+\label{tab:law}
+\end{table}
+
+\begin{equation}
+\label{eq:law}
+  \frac{\Var_{\mathrm{SVGD}}}{\Var_{\mathrm{target}}} \;=\; \frac{\ln K}{d},
+\end{equation}
+to three decimals over an order of magnitude in $d$, confirmed separately by sweeping $K$ from $10$
+to $3200$ at fixed $d$. At $d = 325$ and $K = 400$ that is $1.8\%$.
+
+The mechanism is a feedback loop in the bandwidth rule. The median heuristic measures $h$ from the
+\emph{ensemble}, so contraction tightens the bandwidth, which weakens the repulsion at the scale
+that matters, which permits further contraction. The equilibrium is where that loop closes, and it
+closes at a normalised bandwidth of $h \approx 2$ regardless of where it started.
+
+\subsection{What is ours and what is not}
+
+The $1/d$ scaling is not ours. Ba, Erdogdu, Ghassemi, Sun, Suzuki, Wu and Zhang \cite{ba2022}
+prove, for an isotropic Gaussian target in the proportional limit $d/K \to \gamma > 1$ under the
+\emph{plain} median heuristic $h = \mathrm{Med}$, that
+$\Var_{\mathrm{SVGD}}/\Var = (e-1)^{-1}K/d = 0.582\,K/d$ (their Corollary 4), conditional on a
+near-orthogonality assumption they verify numerically rather than prove. Section~\ref{sec:dim}'s
+\eqref{eq:law} is the same $1/d$ with a different numerator, and the difference is entirely the
+bandwidth rule:
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llll}
+\toprule
+& bandwidth & law & at $K = 400$, $d = 800$\\
+\midrule
+Ba et al.\ \cite{ba2022}, Cor.~4 & $h = \mathrm{Med}$ & $0.582\,K/d$ & $0.291$\\
+this work, and what implementations ship & $h = \mathrm{Med}/\ln K$ & $\ln K/d$ & $0.0075$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Running both conventions through one harness reproduces both laws to within $1\%$ --- measured
+$0.29026$ against a predicted $0.29099$, and $0.00750$ against $0.00749$ --- which validates the
+harness against published theory and isolates a fact worth acting on. Liu and Wang \cite{liu2016}
+recommend $h = \mathrm{Med}/\log K$, and that is what our library used. The cost is
+$0.582K/\ln K$: a factor of $39$ at $K = 400$ and $281$ at $K = 4000$, always against the log.
+
+Deleting it is one line. On the three real posteriors at $K = 400$ it improves the energy distance
+by $1.8$ to $2.4\times$ and the Stein ratio by $5$ to $9\times$, better in all six cells tested; on
+$\mathcal N(0, I_{20})$ at $K = 200$ the variance ratio goes from $0.265$ to $0.929$ against a
+target of $1$. It is free and it is a strict improvement, and we have made the change. It is not a
+fix: both variants are $O(1/d)$, and \eqref{eq:law} rearranged says correct dispersion needs
+$K \sim e^{d}$. At $d = 325$ that ends the discussion.
+
+\begin{remark}
+The gain is smaller on real posteriors than on Gaussians ($2\times$, not $39\times$) because
+neither law applies exactly to an anisotropic target. The direction is the same in every case
+measured.
+\end{remark}
+
+\section{Obstruction 2: fixing the bandwidth buys time, and then a scale error}
+\label{sec:fixed}
+
+If the adaptive bandwidth is the problem, fix it. A large constant $h$ removes the feedback loop by
+construction, and on an isotropic Gaussian a fixed $h \approx 100d$ --- two orders beyond the
+$\sigma = \sqrt d$ that \cite{ba2022} tests and rejects --- has the correct fixed point $v = 1$.
+
+On the real posteriors this works, and then does not. A fixed $h$ converts the collapse from an
+attractor into a transient: the trajectory is a function of $h \times$ iterations, so ten times the
+bandwidth buys ten times the delay and nothing else. Two starts a factor of $16$ apart in variance
+meet at the same equilibrium and hold it to three digits for $450{,}000$ iterations --- so there
+\emph{is} a fixed point, it is simply the wrong one.
+
+\begin{remark}[a mechanism of ours that was wrong]
+We first attributed the wrongness of that fixed point to anisotropy, on the grounds that a scalar
+bandwidth cannot serve directions whose scales differ. That diagnosis survives as a description of
+where the error goes, but the claim we built on it --- that there is no fixed point at fixed
+bandwidth --- was an artifact of reading a single stiff-direction statistic. It is retracted.
+\end{remark}
+
+\subsection{The Laplace metric whitens these posteriors nearly perfectly}
+
+If anisotropy is what is left, remove it. Whitening by $L$ with $LL^\top = H^{-1}$ at the mode
+works better than we expected:
+
+\begin{center}\small
+\begin{tabular}{lrrl}
+\toprule
+system & $\operatorname{cond}(\Sigma_{\mathrm{ref}})$ & $\operatorname{cond}(L^{-1}\Sigma_{\mathrm{ref}}L^{-\top})$ & $5$--$95\%$ eigenvalues after\\
+\midrule
+fn     & $7.9\times10^{3}$ & \textbf{47}  & $0.86$ -- $1.22$\\
+hiv    & $\mathbf{5.6\times10^{10}}$ & \textbf{1.6} & $0.82$ -- $1.21$\\
+lorenz & $1.7\times10^{5}$ & 192 & $0.82$ -- $1.53$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+HIV's condition number falls by ten orders of magnitude. So preconditioning plus a fixed bandwidth
+is the configuration to try, and it had never been run: earlier work tested preconditioning only at
+the adaptive bandwidth, where it was the worst of four kernels.
+
+\begin{remark}[a bug of ours]
+That earlier verdict was worthless, and not because of the bandwidth. Our driver computed the
+preconditioned score as \code{L.T @ jax.grad(lambda z: logp(x0 + L @ z))(y)}. Automatic
+differentiation already differentiates through the \code{L @ z} inside, so it returns
+$L^\top\nabla_x\log p$ on its own and the explicit \code{L.T} applied the metric a second time,
+giving $L^\top L^\top \nabla_x \log p$. Verified against the analytic chain rule, the corrected line
+agrees to $9.7\times10^{-16}$ and the old line is exactly the doubly-applied form to
+$1.2\times10^{-15}$: a $98\%$ relative error. Every preconditioned measurement we had made was
+invalid. None had been published.
+\end{remark}
+
+\subsection{With the bug fixed: an attractor, and a pure scale error}
+
+Whitened, at $h = 10h^\star$ with $h^\star = 2d/\ln K$, and with a small \emph{fixed} step ---
+Prodigy is unstable in whitened coordinates --- SVGD has a genuine attractor. The variance ratio in
+the stiffest $10\%$ of directions, on FitzHugh--Nagumo at $K = 400$ over $100{,}000$ iterations:
+
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+start & $5$k & $25$k & $50$k & $100$k\\
+\midrule
+correct         & 0.959 & 0.787 & 0.738 & \textbf{0.748}\\
+narrow $4\times$ & 0.077 & 0.137 & 0.244 & \textbf{0.494} $\uparrow$\\
+wide $4\times$   & 13.18 & 4.703 & 1.587 & \textbf{0.788} $\downarrow$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Approached from a factor of four below and a factor of four above. And the residual deficit is now
+\emph{uniform}: $0.748$ against the $0.719$ the isotropic law predicts, a $1.04\times$ mismatch,
+where the unpreconditioned dynamics leaves a $20\times$ mismatch between the mean and the stiff
+directions. Preconditioning converts a shape error into a scale error.
+
+A scale error is one number, and the Stein identity measures it without a reference. For a Gaussian
+target and an ensemble of covariance $A$, $R = \tr(A\Sigma^{-1})/d$, so an ensemble uniformly a
+factor $c$ too narrow reads $R = c$; rescaling about its own mean by $1/\sqrt R$ should correct it,
+with no reference, no tuning and no extra gradient evaluations. It does:
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{llrrrr}
+\toprule
+system & ensemble & Stein $R$ & energy $\times$ floor & stiff-var & max $|\theta$ err$|$\\
+\midrule
+fn     & \code{fit()} draws        & 1.274 & 1.65 & 1.058 & 0.077\\
+       & SVGD equilibrium          & 0.702 & 2.42 & 0.748 & 0.242\\
+       & \textbf{rescaled by $1/\sqrt R$} & 1.074 & \textbf{0.68} & \textbf{1.065} & 0.242\\
+\midrule
+lorenz & \code{fit()} draws        & 1.019 & 1.24 & 1.037 & 0.071\\
+       & SVGD equilibrium          & 0.653 & 2.92 & 0.696 & 0.401\\
+       & \textbf{rescaled by $1/\sqrt R$} & 1.074 & \textbf{0.96} & \textbf{1.066} & 0.401\\
+\midrule
+hiv    & \code{fit()} draws        & 1.000 & 1.03 & 1.074 & 0.096\\
+       & SVGD equilibrium          & 0.538 & 6.78 & 0.573 & 0.067\\
+       & \textbf{rescaled by $1/\sqrt R$} & 1.000 & \textbf{0.57} & \textbf{1.065} & \textbf{0.067}\\
+\bottomrule
+\end{tabular}
+\caption{The reference-free recipe: start from \code{fit()} draws, whiten by $H^{-1}$, run at fixed
+$h$ with a small fixed step to equilibrium, measure $R$, rescale by $1/\sqrt R$. A $2.4$ to
+$6.8\times$ ensemble becomes a $0.57$ to $0.96\times$ one, from the ensemble alone. Note the last
+column, which is the subject of Section~\ref{sec:theta}.}
+\label{tab:recipe}
+\end{table}
+
+On the \emph{ensemble}, this is a success and we report it as one. On HIV it beats $400$ exact draws
+on a Kolmogorov--Smirnov comparison. Obstruction 1 is removable.
+
+\section{Obstruction 3: the fixed point is displaced in the parameters}
+\label{sec:theta}
+
+The last column of Table~\ref{tab:recipe} is the reason none of this is a recommendation. The
+largest parameter error goes from $0.077$ to $0.242$ on FitzHugh--Nagumo and $0.071$ to $0.401$ on
+Lorenz. The rescaling does not touch it, and cannot: it corrects a scale about the ensemble's own
+mean, and this is an error \emph{in} that mean. Only HIV improves.
+
+The energy distance improves while the parameters degrade because the energy distance is dominated
+by the $322$ trajectory states. MAGI exists to estimate the $3$ to $7$ parameters.
+
+\subsection{Where the displacement points}
+
+It is not arbitrary. Decomposing the equilibrium's $\theta$ mean along the axis from the joint MAP
+to the reference mean, with $t$ the signed fraction along that axis and \emph{gap} its length:
+
+\begin{center}\small
+\begin{tabular}{lrrrr}
+\toprule
+system & $t(\theta)$ & gap (sd) & $|t|\cdot$gap & measured $\theta$ error\\
+\midrule
+fn     & $+0.186$ & 1.029 & 0.191 & 0.242\\
+lorenz & $-0.221$ & 1.803 & 0.399 & \textbf{0.401}\\
+hiv    & $+0.454$ & 0.148 & 0.067 & \textbf{0.067}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The displacement is aligned with that axis to $0.92$--$0.999$, against $0.58$ for a random
+direction at $p = 3$, and two of the three products reproduce the measured error to the printed
+digit. \textbf{HIV improves because its gap is $0.15$ posterior standard deviations, not because it
+differs in kind.} The effect is specific to $\theta$: over the same run FitzHugh--Nagumo's state
+block converges \emph{onto} the reference mean ($t$: $0.427 \to 0.024$) while $\theta$ leaves it.
+
+\subsection{The mechanism is non-Gaussianity}
+
+Run the identical dynamics --- same metric, bandwidth, step, start, particle count --- on an exact
+Gaussian with the reference's own mean and covariance. The $\theta$ error lands at $0.0045$ sd on
+FitzHugh--Nagumo and $0.0351$ on Lorenz, \emph{below} each reference's own Monte Carlo floor,
+against $0.2422$ and $0.4013$ on the real posteriors.
+
+So SVGD's fixed point is exact for a Gaussian target, and on a target that is not one it sits
+displaced along the mode-to-mean axis by a fraction of that axis's length. That axis is not an
+incidental feature of these problems. Correcting the mode to the mean is what the deterministic
+pipeline is \emph{for} \cite{companion1}: the Laplace approximation at the MAP is mis-centred by a
+full posterior standard deviation on a benchmark as benign as FitzHugh--Nagumo, and removing that
+bias is the entire content of the method SVGD would be replacing. SVGD gives it back.
+
+\begin{remark}[a second hypothesis of ours that was wrong]
+The natural explanation is mode-seeking: the drift term is a kernel-weighted average of the score,
+which should pull the ensemble mean toward high density. That predicts $t > 0$ everywhere. It is
+wrong --- Lorenz's $t$ is $-0.221$, drifting \emph{away} from the MAP and past the reference mean
+on the far side --- and the fraction is not universal either ($+0.186$, $-0.221$, $+0.454$). The
+axis and the magnitude are understood; the sign is not.
+\end{remark}
+
+\subsection{What repairs it, and why that settles the question}
+
+Importance-reweighting the equilibrium by the profiled log-density recovers parity with the
+deterministic pipeline: $0.242 \to 0.071$, $0.401 \to 0.090$, $0.067 \to 0.029$, at effective
+sample sizes of $78\%$, $66\%$ and $97\%$ and $\khat$ below $0.3$, in negligible time. On HIV that
+is $3.3\times$ better than \code{fit()}.
+
+This is the most useful negative result in the report. The repair works by reintroducing
+$\log \hat p(\theta)$ --- the profiled density, which is the deterministic pipeline's entire
+machinery. What does the estimating is the density; SVGD has supplied a proposal. And the
+incumbent already makes its own proposal, from the profile mode and curvature, at a cost of four to
+six seconds.
+
+The drift is a finite-$K$ bias and does vanish, at $K^{-0.74}$ on FitzHugh--Nagumo and $K^{-0.36}$
+on Lorenz. Reaching \code{fit()}'s accuracy needs roughly $1.5\times10^{4}$ and $1.2\times10^{5}$
+particles respectively, and \code{fit()} is more accurate on $\theta$ at every $K$ we tested.
+
+\begin{remark}[a third hypothesis of ours that was wrong]
+We had called the step size a real lever and the $\mathrm{lr}\to 0$ limit the most consequential
+untested gap. At matched flow time --- $\mathrm{lr}\times$iterations held constant --- three step
+sizes spanning a factor of ten give $t = 0.186$ and a $\theta$ error of $0.2422$ identically to
+four digits. The apparent dependence was less flow time. Withdrawn.
+\end{remark}
+
+\section{The one regime where dimension is not the obstacle}
+\label{sec:profiled}
+
+Obstruction 1 is about $d$. The natural response is to run SVGD where $d$ is small: on the profiled
+$p$-dimensional marginal, with the states integrated out and autodiff taken through the inner
+solve. At $p = 3$ this is the one configuration in which SVGD beat the incumbent --- $0.30\times$
+and $0.36\times$ the $64$-draw floor on FitzHugh--Nagumo and Lorenz, better than \code{fit()} by
+$2.5$ to $8\times$, at $6$ to $12\times$ the wall clock.
+
+It does not survive $p = 5$. On HIV:
+
+\begin{center}\small
+\begin{tabular}{llrrrr}
+\toprule
+$K$ & method & $\theta$ energy & $\times$ floor & max $|\theta$ err$|$ & sd ratio\\
+\midrule
+16  & \code{fit()}   & 0.1193 & \textbf{0.50} & 0.119 & 0.961\\
+16  & profiled SVGD  & 0.2529 & 1.05 & 0.103 & \textbf{0.578}\\
+64  & \code{fit()}   & 0.0514 & \textbf{1.25} & 0.123 & 0.931\\
+64  & profiled SVGD  & 0.0529 & 1.29 & 0.281 & \textbf{0.881}\\
+256 & \code{fit()}   & 0.0145 & \textbf{0.76} & 0.103 & 0.986\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The sd ratios say why: the $\theta$ ensemble is itself underdispersed, which is \eqref{eq:law}
+reappearing with $d$ replaced by $p$. It predicts $0.55$ at $(K=16, p=5)$ and $0.83$ at
+$(K=64, p=5)$ against measured $0.33$ and $0.78$; at $p = 3$ it predicts $0.92$ at $K = 16$ and
+above $1$ at $K = 64$, and FitzHugh--Nagumo and Lorenz duly succeed at every $K$. The law therefore
+doubles as a design rule, and this is the third thing worth keeping:
+
+\begin{equation}
+  \text{profiled SVGD needs } \ln K \gtrsim p, \text{ i.e. } K \gtrsim e^{p},
+\end{equation}
+
+about $20$ particles at $p = 3$ and $150$ at $p = 5$, confirmed over seven values of $p$ as
+$\ln K_{\mathrm{crit}} = 0.86p + 1.45$ with the rate holding to $8$--$10\%$. Below it the parameter
+ensemble collapses exactly as the joint one does.
+
+Two further costs. HIV at $K = 256$ --- where the rule says it should work --- exhausted a $32$\,GB
+V100 in the reverse pass, needing $256$ particles $\times$ three Cholesky factorisations of a
+$603\times603$ block, and had to be rerun with the inner Newton steps rematerialised. And
+Section~\ref{sec:theta}'s displacement applies here too, since the profiled marginal is no more
+Gaussian than the joint posterior.
+
+\section{Verdict}
+
+Not worth pursuing, for the joint posterior or the profiled marginal.
+
+The first obstruction alone would not settle it, because it is removable and we removed it. The
+third does settle it, and it is structural rather than incidental: SVGD's fixed point is exact for
+a Gaussian and displaced for anything else, along the one axis whose correction is the point of the
+exercise. No bandwidth, metric or optimiser reaches it, because it is the fixed point and not an
+approach to it; the only thing that repairs it reintroduces the density that makes SVGD
+unnecessary. Against an incumbent that reaches the reference's own agreement floor on every
+scorable system in four to six seconds and reports its own reliability without a reference, there
+is nothing left to recommend.
+
+Three things are worth keeping, and two of them are not about MAGI:
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+\item \textbf{Drop the $1/\log K$} from the median-heuristic bandwidth. One line, $1.8$ to
+  $2.4\times$ on real posteriors and up to $39\times$ on Gaussians, better in every case measured,
+  and it replaces a rule nobody has analysed with one that has a theorem attached \cite{ba2022}.
+\item \textbf{Report the Stein dispersion ratio.} $R \to 1$ under the target and $R < 1$ when
+  underdispersed; for a Gaussian target it is exactly the mean variance-inflation factor, and in a
+  smoke test it reads $0.9271$ where the measured ratio is $0.9270$. It is the only cheap
+  diagnostic that sees SVGD's characteristic failure, which the optimiser's own convergence test
+  cannot: the ensemble converges, to the wrong spread.
+\item \textbf{$K \gtrsim e^{p}$}, for anyone running SVGD on a low-dimensional marginal.
+\end{enumerate}
+
+\section{What would change the verdict, and what we did not test}
+
+We would revisit this if the displacement of Section~\ref{sec:theta} turned out to be removable by
+something cheaper than the profiled density --- but the Gaussian control makes that unlikely, since
+it shows the displacement is the fixed point's response to non-Gaussianity rather than an artifact
+of finite $K$, finite time or the metric. The sign of $t$ is unexplained; explaining it would be
+satisfying and would not change the magnitude.
+
+Hes1 is untested throughout, and it is the one case where the incumbent is genuinely unreliable:
+its gate declines, its effective sample size varies from $2.3\%$ to $21.1\%$ with the Sobol seed,
+and its reference does not converge. It is also the only case where SVGD might have an argument, in
+that it does not traverse the funnel geometry that defeats NUTS. We did not test it because with no
+usable reference a success there could not be scored, and because Section~\ref{sec:theta}'s
+mechanism is indifferent to the funnel. The better routes for Hes1 are elsewhere:
+observe the unobserved component, reparameterise to the profiled coordinates, or Riemannian HMC
+\cite{companion2}.
+
+Finally, all measurements here are float64, at $K = 400$ unless stated, on two GPUs that agree to
+four digits on a shared benchmark. Every reference-scored claim excludes Hes1.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{yang2021} S.~Yang, S.~W.~K.~Wong, S.~C.~Kou.
+  Inference of dynamic systems from noisy and sparse data via manifold-constrained Gaussian
+  processes. \emph{PNAS} 118(15), 2021.
+\bibitem{liu2016} Q.~Liu, D.~Wang.
+  Stein variational gradient descent: a general purpose Bayesian inference algorithm.
+  \emph{NeurIPS}, 2016.
+\bibitem{ba2022} J.~Ba, M.~A.~Erdogdu, M.~Ghassemi, S.~Sun, T.~Suzuki, D.~Wu, T.~Zhang.
+  Understanding the variance collapse of SVGD in high dimensions. \emph{ICLR}, 2022.
+\bibitem{huang2023} X.~Huang, H.~Dong, C.~Fang.
+  Local KL convergence rate for Stein variational gradient descent with reweighted kernel, 2023.
+\bibitem{companion1} A fast, self-certifying Gaussian posterior for MAGI ODE parameter inference.
+  Companion technical report, 2026.
+\bibitem{companion2} Profiling the states out: posterior inference for MAGI without a Gaussian
+  assumption. Companion technical report, 2026.
+\end{thebibliography}
+
+\end{document}
