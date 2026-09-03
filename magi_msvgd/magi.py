@@ -1148,16 +1148,27 @@ class MAGI:
             self.fit(**fit_kwargs)
         return self.posterior.sample(k=k, seed=seed, unpack=unpack)
 
-    def condition_A(self, particle=None, scale=0.7, seed=0):
+    def condition_A(self, particle=None, rel=0.1, seed=0, scale=None):
         '''
         Test whether the ODE is affine in the state at fixed theta, which makes p(X | theta)
-        exactly Gaussian and opens an exact route that needs no Gaussian approximation at all.
+        exactly Gaussian -- see posterior_gaussianity.tex for what that does and does not buy.
 
-        Returns ||H_XX(X1) - H_XX(X2)|| / ||H_XX|| at two states sharing one theta, which is
-        exactly 0 under the condition and grows with the departure from it. Measured 0.0 for
-        FitzHugh-Nagumo with its cubic term removed and 0.13 for the real one -- and the size
-        of the mean correction the pipeline then needs tracks it monotonically (0.005 at 0.0,
-        0.174 at 0.13).
+        Returns ||H_XX(X1) - H_XX(X2)|| / ||H_XX|| at two states sharing one theta. H_XX is
+        independent of X exactly when f is affine in X, so this is 0 under the condition and
+        grows with the departure from it.
+
+        The perturbation is `rel` times the root-mean-square of the state, not an absolute
+        displacement, because an absolute one is not comparable across problems: HIV's states run
+        to 1e5, so the old default of 0.7 perturbed them by a relative 1e-5 and reported
+        7.5e-07 -- four orders below what a like-for-like perturbation gives (1.1e-03), and
+        enough to make HIV look exactly affine when it is merely close. Pass `scale` to recover
+        the absolute behaviour.
+
+        On the four systems in tests.py, at rel = 0.1: HIV 1.1e-03, Lorenz 2.2e-02,
+        FitzHugh-Nagumo 3.2e-02, Hes1 3.6e-01, against exactly 0 for a field constructed affine
+        in X. That ordering is the same one every other difficulty measure in this pipeline
+        produces -- curvature variation, reference divergences, mode-to-mean distance -- which is
+        suggestive on four points and no more than that.
         '''
         if particle is None:
             if getattr(self, 'map_particle', None) is None:
@@ -1165,9 +1176,11 @@ class MAGI:
             particle = self.map_particle
         p = self.p
         x1 = np.asarray(particle, np.float64)
+        nD = self.n * self.D
+        if scale is None:
+            scale = rel * float(np.sqrt(np.mean(x1[p:p + nD] ** 2)))
         x2 = x1.copy()
-        x2[p:p + self.n * self.D] += scale * np.random.default_rng(seed).standard_normal(
-            self.n * self.D)
+        x2[p:p + nD] += scale * np.random.default_rng(seed).standard_normal(nD)
         hfn = self._hessian_fn()
         dt = self.mu.dtype
         A1 = np.asarray(hfn(jnp.asarray(x1, dt)), np.float64)[p:, p:]

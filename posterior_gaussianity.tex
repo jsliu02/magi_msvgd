@@ -1,0 +1,361 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.05in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!45!black,citecolor=blue!45!black,urlcolor=blue!45!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\Hxx}{H_{\!X\!X}}
+\newcommand{\xstar}{x^{\star}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{definition}
+\newtheorem{condition}{Condition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{\bfseries Conditional Gaussianity in the MAGI posterior:\\[2pt]
+what an affine vector field does and does not buy}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+If the ODE's vector field is affine in the state at fixed parameters, MAGI's conditional
+$p(X \mid \theta)$ is \emph{exactly} Gaussian. That claim invites an immediate objection: the
+parameters may enter the field arbitrarily --- through exponentials, reciprocals, anything --- so
+how can the posterior be Gaussian? The objection is sound and the claim survives, because the two
+statements are about different objects. Gaussianity here is a property of the conditional in $X$;
+$\theta$ enters only through coefficients that are constants with respect to $X$, so it can shape
+the conditional's mean and covariance however it likes without changing the degree of the
+polynomial in $X$. The joint and the $\theta$-marginal remain as non-Gaussian as the model makes
+them.
+
+We state and prove the proposition, exhibit a field that is affine in $X$ while depending on
+$\theta$ through $e^{a}$, $\sin 3b$, $c^{2}$ and $(1+a^{2})^{-1}$, and verify numerically that its
+log-density is exactly quadratic in $X$ at a displacement of $100$ state units while being
+thoroughly non-quadratic in $\theta$. We then separate what the condition buys --- the elimination
+of the states is exact, so a $d$-dimensional problem becomes a $p$-dimensional one with no
+approximation error --- from what it does not: the remaining $p$-dimensional integral is not
+Gaussian and still has to be done. Finally we measure how far the four benchmark systems sit from
+the condition, which required first repairing the diagnostic that measures it: its perturbation was
+absolute rather than relative, and on a system whose states reach $10^{5}$ that reported
+$7.5\times10^{-7}$ where a like-for-like perturbation gives $1.1\times10^{-3}$.
+\end{abstract}
+
+\section{The objection}
+
+The claim under examination, which appears in \cite{companion1} and in this codebase's
+\code{condition\_A}, is:
+
+\begin{quote}
+If the vector field is affine in the state at fixed parameters, then $p(X \mid \theta)$ is exactly
+Gaussian and no approximation is required to integrate the states out.
+\end{quote}
+
+The objection is that $\theta$ may enter $f$ in any way at all. Nothing in ``affine in the state''
+restricts the $\theta$-dependence, so one could have $\dot x = -e^{\theta} x$, whose posterior in
+$\theta$ is certainly not Gaussian. How can a posterior be exactly Gaussian when a parameter
+appears inside an exponential?
+
+It cannot, and the claim does not say it is. The claim is about the \emph{conditional}
+$p(X \mid \theta)$ at a fixed value of $\theta$. Section~\ref{sec:prop} shows that $\theta$'s
+arbitrariness is confined to coefficients that do not involve $X$, so it cannot disturb the
+quadratic structure in $X$; Section~\ref{sec:notbuy} shows that it survives untouched in the
+$\theta$-marginal, which is where the objection's intuition correctly applies.
+
+\section{The log-density}
+\label{sec:setup}
+
+Write $n$ for the discretisation points, $D$ for the state components, $p$ for the parameters, and
+$x = \operatorname{vec}(X) \in \R^{nD}$. MAGI's negative log-density at fixed observation noise is
+a sum of four terms \cite{yang2021}:
+\begin{equation}
+\label{eq:U}
+  U(\theta, x) = \tfrac12\Big[\,
+    b\,(x-\mu)^\top G (x-\mu)
+    \;+\; (x-y)^\top W (x-y)
+    \;+\; b\, r^\top \Lambda\, r \,\Big]
+  \;+\; \tfrac12 (\theta-\bar\theta)^\top P (\theta-\bar\theta),
+\end{equation}
+dropping terms independent of $(\theta, x)$. Here $b = \beta^{-1}$ is the prior tempering,
+$G = \operatorname{blkdiag}_d(C_d^{-1})$ and $\Lambda = \operatorname{blkdiag}_d(K_d^{-1})$ are the
+GP precision blocks, $W$ is diagonal with $\sigma_d^{-2}$ on observed entries and zero elsewhere,
+$P$ is the parameter prior precision, and
+\begin{equation}
+\label{eq:resid}
+  r(\theta, x) \;=\; F(x, \theta) - \dot\mu - M(x - \mu), \qquad
+  M = \operatorname{blkdiag}_d(m_d),
+\end{equation}
+with $F(x,\theta)$ stacking $f(X_i, \theta, t_i)$ over grid points. Three observations about
+\eqref{eq:U} carry the whole argument:
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt]
+\item The first two bracketed terms are quadratic in $x$ and involve $\theta$ \emph{not at all}.
+\item The fourth term involves $\theta$ and involves $x$ not at all.
+\item $\theta$ and $x$ meet in exactly one place: the residual $r$, and there only through $F$.
+\end{enumerate}
+
+So every question about the joint structure of \eqref{eq:U} is a question about $F$.
+
+\section{The condition, and what it gives}
+\label{sec:prop}
+
+\begin{condition}[affine in the state]
+\label{cond:A}
+For every $\theta$ and every $t$, the map $X \mapsto f(X, \theta, t)$ is affine:
+\[
+  f(X_i, \theta, t_i) \;=\; A_i(\theta, t_i)\, X_i \;+\; c_i(\theta, t_i),
+\]
+with $A_i \in \R^{D\times D}$ and $c_i \in \R^{D}$ \emph{arbitrary} functions of $\theta$ and $t$.
+\end{condition}
+
+Note what is not assumed. No linearity, smoothness, boundedness or monotonicity in $\theta$; no
+constancy in $t$; and in particular not that $f$ is affine in $(X,\theta)$ jointly, which is a far
+stronger requirement and excludes almost every model of interest.
+
+\begin{proposition}
+\label{prop:main}
+Under Condition~\ref{cond:A}, for each fixed $\theta$ the function $U(\theta,\cdot)$ is an exact
+quadratic in $x$, and consequently
+\[
+  p(x \mid \theta) \;=\; \mathcal N\big(\xstar(\theta),\, \Hxx(\theta)^{-1}\big)
+  \quad\text{exactly,}
+\]
+with
+\begin{equation}
+\label{eq:Hxx}
+  \Hxx(\theta) \;=\; b\,G + W + b\, B(\theta)^\top \Lambda\, B(\theta),
+  \qquad B(\theta) = A(\theta) - M,
+\end{equation}
+\begin{equation}
+\label{eq:xstar}
+  \xstar(\theta) \;=\; \Hxx(\theta)^{-1}\big[\, b\,G\mu + Wy - b\,B(\theta)^\top \Lambda\, e(\theta)\,\big],
+  \qquad e(\theta) = c(\theta) - \dot\mu + M\mu,
+\end{equation}
+where $A(\theta) = \operatorname{blkdiag}_i(A_i)$ and $c(\theta)$ stacks the $c_i$. Moreover the
+elimination of $x$ is exact:
+\begin{equation}
+\label{eq:exact}
+  \int_{\R^{nD}} e^{-U(\theta,x)}\,\mathrm{d}x
+  \;=\; e^{-U(\theta,\,\xstar(\theta))}\;(2\pi)^{nD/2} \det \Hxx(\theta)^{-1/2}.
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Under Condition~\ref{cond:A}, $F(x,\theta) = A(\theta)x + c(\theta)$, so by \eqref{eq:resid}
+$r = B(\theta)x + e(\theta)$ is affine in $x$. Then $r^\top\Lambda r$ is quadratic in $x$, and the
+remaining $x$-dependent terms of \eqref{eq:U} are quadratic by inspection, so $U(\theta,\cdot)$ is
+quadratic. Differentiating,
+\[
+  \nabla_x U = b\,G(x-\mu) + W(x-y) + b\,B^\top\Lambda\,(Bx + e),
+  \qquad
+  \nabla^2_x U = b\,G + W + b\,B^\top\Lambda B,
+\]
+which is \eqref{eq:Hxx} and is independent of $x$; setting $\nabla_x U = 0$ gives
+\eqref{eq:xstar}. A quadratic negative log-density is a Gaussian, and \eqref{eq:exact} is the
+Gaussian normalising constant, exact rather than asymptotic.
+\end{proof}
+
+\subsection{Why $\theta$'s arbitrariness cannot interfere}
+
+$A(\theta)$ and $c(\theta)$ are the only route by which $\theta$ enters, and they enter as
+\emph{coefficients}: constants with respect to $x$. They may be arbitrarily wild functions of
+$\theta$, and the consequence is that $\Hxx(\theta)$ and $\xstar(\theta)$ are arbitrarily wild
+functions of $\theta$. Neither changes the fact that $U(\theta,\cdot)$ is a polynomial of degree
+two in $x$.
+
+The general point is that \emph{conditional} Gaussianity places no constraint whatever on how the
+conditional's moments depend on the conditioning variable. It is a statement about the shape of one
+slice, not about how the slices are arranged.
+
+\begin{remark}[conditional Gaussianity is nearly vacuous as a restriction on the joint]
+A model that is Gaussian in $x$ given $\theta$, with arbitrary $\theta$-dependence of the moments,
+is a Gaussian \emph{mixture} once $\theta$ is integrated out. Mixtures of Gaussians are dense in
+the space of distributions, so Condition~\ref{cond:A} restricts the joint posterior essentially not
+at all. What it restricts is the \emph{factorisation}: it says the conditional slices are exactly
+Gaussian, which is a computational statement and not a smallness assumption. This is precisely why
+the objection in Section~1 feels forceful and is nonetheless answerable.
+\end{remark}
+
+\section{Demonstration}
+\label{sec:demo}
+
+Take $D = 2$, $p = 3$, and a field affine in $X$ whose $\theta$-dependence is chosen to be as
+unpleasant as convenient:
+\begin{equation}
+\label{eq:demofield}
+  f(X, \theta, t) \;=\;
+  \begin{pmatrix} -e^{a} & \sin 3b \\ c^{2} & -(1+a^{2})^{-1} \end{pmatrix} X
+  \;+\; \begin{pmatrix} \cos 2b \\ e^{-c} \end{pmatrix},
+  \qquad \theta = (a,b,c).
+\end{equation}
+Data were generated at $\theta = (0.3, 0.7, 0.5)$ on a grid of $81$ points over $[0,4]$ with $21$
+observations per component and $\sigma = 0.05$, and the mode found by Gauss--Newton in float64.
+
+\paragraph{Is $\Hxx$ independent of $X$?} Proposition~\ref{prop:main} says yes exactly, and
+$\|\Hxx(X_1) - \Hxx(X_2)\| / \|\Hxx\|$ at two states sharing one $\theta$ measures the departure.
+For \eqref{eq:demofield} it is $0$ to the last bit, at any perturbation size.
+
+\paragraph{Is the quadratic model exact, and how far out?} This is the sharper test, because a
+vanishing third derivative at a point is a local statement while \eqref{eq:exact} is global. We
+compare $U(\theta, \xstar + \delta)$ against its own second-order expansion
+$U(\theta,\xstar) - g^\top\delta + \tfrac12\delta^\top \Hxx \delta$, relative to the change in $U$
+itself, along a random direction at growing $\|\delta\|$:
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lrr}
+\toprule
+$\|\delta\|$ (state units) & \eqref{eq:demofield}, affine in $X$ & FitzHugh--Nagumo, cubic in $X$\\
+\midrule
+1   & $1.158\times10^{-12}$ & $1.395\times10^{-4}$\\
+10  & $1.157\times10^{-12}$ & $3.891\times10^{-2}$\\
+100 & $1.157\times10^{-12}$ & $9.479\times10^{-1}$\\
+\bottomrule
+\end{tabular}
+\caption{Relative error of the quadratic model of $U$ in $x$. For the affine field it is flat at
+the float64 round-off floor over two orders of magnitude in displacement --- the quadratic is not
+an approximation that degrades, it is the function. For FitzHugh--Nagumo it grows until the
+quadratic explains essentially nothing.}
+\label{tab:taylor}
+\end{table}
+
+\paragraph{And in $\theta$?} Along a line in $\theta$ instead, with the same third-difference
+stencil, $|U'''|/|U''| = 2.83$ for \eqref{eq:demofield} against $1.07\times10^{-10}$ along a line
+in $X$ --- the latter being the round-off floor of a third difference dividing by $h^3 = 10^{-9}$
+rather than a measured curvature. The same posterior is exactly quadratic in one block of
+coordinates and emphatically not in the other, which is the whole content of this note.
+
+\section{What the condition buys}
+\label{sec:buy}
+
+\eqref{eq:exact} is an identity, not an approximation, so the profiled construction of
+\cite{companion2},
+\begin{equation}
+\label{eq:profiled}
+  p(\theta) \;\propto\; \pi_\Theta(\theta)\,
+  \exp\!\big(-U(\theta, \xstar(\theta))\big)\, \det \Hxx(\theta)^{-1/2},
+\end{equation}
+is \emph{exact} under Condition~\ref{cond:A}. Three consequences:
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+\item \textbf{The dimension reduction is exact.} A $d = p + nD$ dimensional inference problem
+becomes a $p$-dimensional one --- $325 \to 3$ on the benchmark of \cite{companion1} --- with no
+error incurred in the reduction. Everything that remains is error in the $p$-dimensional integral,
+which is a quadrature problem in three to seven dimensions rather than an approximation.
+\item \textbf{The mixture representation is exact.} The pipeline reports one Gaussian in $X$ per
+$\theta$ node; under Condition~\ref{cond:A} each of those Gaussians is the true conditional, so
+every moment computed from the mixture, including $\operatorname{Cov}(\theta, X)$, is exact up to
+the quadrature error in $\theta$.
+\item \textbf{The inner solve converges in one step.} $\xstar(\theta)$ solves a linear system, so
+the inner Gauss--Newton iteration is exact after a single iteration rather than iterating to a
+tolerance.
+\end{enumerate}
+
+\section{What it does not buy}
+\label{sec:notbuy}
+
+The $\theta$-marginal \eqref{eq:profiled} is not Gaussian, is not close to Gaussian, and still has
+to be integrated numerically. Both factors carry the arbitrary $\theta$-dependence:
+$U(\theta,\xstar(\theta))$ through $A$ and $c$, and $\det\Hxx(\theta)$ through $A$ alone. The
+measured $|U'''|/|U''| = 2.83$ of Section~\ref{sec:demo} is that non-Gaussianity, in the same
+posterior whose conditional is exactly Gaussian.
+
+Nor does the condition make the mode a good summary. The mode-to-mean displacement that motivates
+the whole of \cite{companion1} is a property of the $\theta$-marginal, and Condition~\ref{cond:A}
+says nothing about it.
+
+\begin{remark}[a narrower sub-case where more collapses]
+If $A$ does not depend on $\theta$ --- $f = AX + c(\theta)$, so the parameters enter only the
+forcing --- then $\Hxx$ is constant, the $\det\Hxx(\theta)^{-1/2}$ factor in \eqref{eq:profiled}
+becomes an irrelevant constant, and the $\theta$-marginal reduces to
+$\pi_\Theta(\theta)\exp(-U(\theta,\xstar(\theta)))$ with $\xstar$ affine in $c(\theta)$. If
+additionally $c$ is affine in $\theta$, the whole posterior is jointly Gaussian and there is
+nothing left to compute. That is the case the objection of Section~1 was reaching for, and it is
+much smaller than Condition~\ref{cond:A}.
+\end{remark}
+
+\section{How near are real problems, and a repair to the diagnostic}
+\label{sec:near}
+
+$\|\Delta \Hxx\|/\|\Hxx\|$ across two states is a continuous measure, so it reports not only
+whether Condition~\ref{cond:A} holds but how far off it is. Measuring that across problems
+required fixing it first: the perturbation was an \emph{absolute} displacement, which is not
+comparable between a system whose states are $O(1)$ and one whose states reach $10^{5}$. HIV, with
+$\|X\|_{\mathrm{rms}} = 1.0\times10^{4}$, was being perturbed by a relative $10^{-5}$ and duly
+reported $7.5\times10^{-7}$ --- close enough to zero to suggest it satisfies the condition exactly,
+which it does not. The default is now a fixed fraction of the state's own root-mean-square.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lrrr}
+\toprule
+system & $\|X\|_{\mathrm{rms}}$ & absolute, $0.7$ & \textbf{relative, $10\%$}\\
+\midrule
+\eqref{eq:demofield}, affine in $X$ & 0.53 & $0$ & $\mathbf{0}$\\
+HIV            & $1.0\times10^{4}$ & $7.5\times10^{-7}$ & $\mathbf{1.1\times10^{-3}}$\\
+Lorenz         & 17.1 & $9.1\times10^{-3}$ & $\mathbf{2.2\times10^{-2}}$\\
+FitzHugh--Nagumo & 1.16 & $3.8\times10^{-1}$ & $\mathbf{3.2\times10^{-2}}$\\
+Hes1           & 1.22 & $4.3\times10^{1}$  & $\mathbf{3.6\times10^{-1}}$\\
+\bottomrule
+\end{tabular}
+\caption{Departure from Condition~\ref{cond:A}. The absolute column is not a like-for-like
+comparison and inverts the ordering of HIV against Lorenz and of Lorenz against
+FitzHugh--Nagumo. On the relative measure none of the four systems satisfies the condition ---
+HIV's mass-action term $\eta T_U V$, Lorenz's $xy$ and $xz$, FitzHugh--Nagumo's cubic and Hes1's
+$\exp(X)$ and $(1+P^2)^{-1}$ all violate it --- but they violate it by two and a half orders of
+magnitude of difference.}
+\label{tab:near}
+\end{table}
+
+The ordering in that last column is worth recording, with the caveat that four points support very
+little. HIV is nearest the condition, then Lorenz and FitzHugh--Nagumo together, then Hes1 by an
+order of magnitude. That is the same ordering produced by every other difficulty measure in this
+pipeline: curvature variation over the posterior ($1.21$, $1.9\times10^2$, $3.8\times10^2$,
+$1.1\times10^6$), reference-chain divergences ($0\%$, $1.1\%$, $1.4\%$, $13\%$), agreement between
+the profiled curvature and the joint Laplace's, and the mode-to-mean distance ($0.16$, $1.42$,
+$1.07$, $1.43$ posterior sd). If that is not a coincidence it is unsurprising: departure from
+Condition~\ref{cond:A} is exactly the extent to which $\Hxx$ moves as $X$ moves, and a posterior
+whose curvature does not move is one every method here finds easy.
+
+\begin{remark}[scope]
+Condition~\ref{cond:A} and Proposition~\ref{prop:main} are stated at fixed observation noise. With
+$\sigma$ unknown and inferred, \eqref{eq:U} acquires $\sum_d N_d \log \sigma_d^2$ and the $W$ block
+becomes $\sigma$-dependent; $p(x \mid \theta, \sigma)$ is still exactly Gaussian at fixed $\sigma$,
+but the joint over $(\theta,\sigma)$ is not, and \code{condition\_A} holds $\sigma$ fixed. Worth
+knowing before relying on it.
+\end{remark}
+
+\section{Summary}
+
+The claim is about $p(X\mid\theta)$ and it is exact. The objection --- that $\theta$ may enter
+arbitrarily --- is correct and lands on the $\theta$-marginal, which is not Gaussian and which the
+condition says nothing about. What is bought is that eliminating $300$ to $600$ state dimensions
+costs nothing in accuracy, leaving a small integral to be done honestly; what is not bought is any
+part of that small integral. The models satisfying the condition exactly are linear compartment and
+pharmacokinetic systems, and any constant- or time-varying-coefficient linear system --- with rate
+constants entering as arbitrarily as one likes, which is the usual case, since they are typically
+parameterised on a log scale. None of the four benchmarks here qualifies, though HIV comes within
+about $10^{-3}$ of doing so.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{yang2021} S.~Yang, S.~W.~K.~Wong, S.~C.~Kou.
+  Inference of dynamic systems from noisy and sparse data via manifold-constrained Gaussian
+  processes. \emph{PNAS} 118(15), 2021.
+\bibitem{companion1} A fast, self-certifying Gaussian posterior for MAGI ODE parameter inference.
+  Companion technical report, 2026.
+\bibitem{companion2} Profiling the states out: posterior inference for MAGI without a Gaussian
+  assumption. Companion technical report, 2026.
+\end{thebibliography}
+
+\end{document}
