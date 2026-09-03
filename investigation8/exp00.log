@@ -1,0 +1,4 @@
+  system    dim  ref dim  match  logp(ref mean)  |grad| at ref mean  Stein R on sub  fit energy    floor
+      fn    325      325     OK         -8.1191           9.769e+01          0.9996      0.1372   0.0820
+     hiv    608      608     OK       -894.0260           5.630e+00          1.0008      0.1114   0.1078
+  lorenz    306      306     OK       -231.9272           3.186e+01          0.9981      0.0972   0.0783
