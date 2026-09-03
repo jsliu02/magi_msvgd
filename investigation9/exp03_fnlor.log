@@ -1,0 +1,14 @@
+
+===== fn p=3 K=400 precond h=10h* | gap(theta,max) 1.029 sd =====
+                target      lr  |dtheta| (sd)  max|dtheta|  max|theta err|  |dX| (sd, rms)   SteinR    sec
+        real posterior    0.01         0.3454       0.3157          0.2422          0.1533   0.7023    221
+        real posterior   0.003         0.2804       0.2577          0.1842          0.1162   0.7208    220
+  N(mean_ref, cov_ref)    0.01         0.1034       0.0756          0.0045          0.1077   0.7625    174
+  N(mean_ref, cov_ref)   0.003         0.1039       0.0759          0.0042          0.1076   0.7549    173
+
+===== lorenz p=3 K=400 precond h=10h* | gap(theta,max) 1.803 sd =====
+                target      lr  |dtheta| (sd)  max|dtheta|  max|theta err|  |dX| (sd, rms)   SteinR    sec
+        real posterior    0.01         0.4896       0.3690          0.4013          0.2015   0.6530    173
+        real posterior   0.003         0.2457       0.1862          0.2185          0.1050   0.6996    170
+  N(mean_ref, cov_ref)    0.01         0.1199       0.0913          0.0351          0.0978   0.7379    167
+  N(mean_ref, cov_ref)   0.003         0.1312       0.1029          0.0514          0.1024   0.7598    241

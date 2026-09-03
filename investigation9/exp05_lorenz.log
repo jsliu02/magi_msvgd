@@ -1,0 +1,5 @@
+
+===== lorenz p=3 K=400 h=10h* | flow time lr*iters = 1000 | gap 1.803 sd | theta floor 0.0405 =====
+      lr     iters   t_theta   r_theta   align  max|th err|   SteinR  e/floor     sec
+    0.01    100000    -0.221     0.024    0.99       0.4013   0.6530     2.92     244
+   0.003    333333    -0.221     0.024    0.99       0.4013   0.6530     2.92     569

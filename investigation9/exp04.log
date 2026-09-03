@@ -1,0 +1,30 @@
+
+===== fn p=3 K=400 =====
+                            estimate  max|theta err|  x floor        ESS    khat
+              fit() sample at same K          0.0768     7.67                nan
+                  start: fit() draws          0.0768     7.67                nan
+            precond SVGD equilibrium          0.2422    24.17                nan
+               + 1/sqrt(R) rescaling          0.2422    24.17                nan
+     + IS reweight by log p_hat (0s)          0.0706     7.04  312 (78%)   -0.95
+       FLOOR: reference half-vs-half          0.0100     1.00
+   failed profile solves: 0/400; log-weight spread 5.7 nats
+
+===== lorenz p=3 K=400 =====
+                            estimate  max|theta err|  x floor        ESS    khat
+              fit() sample at same K          0.0710     1.75                nan
+                  start: fit() draws          0.0710     1.75                nan
+            precond SVGD equilibrium          0.4013     9.91                nan
+               + 1/sqrt(R) rescaling          0.4013     9.91                nan
+     + IS reweight by log p_hat (0s)          0.0897     2.21  263 (66%)   -0.85
+       FLOOR: reference half-vs-half          0.0405     1.00
+   failed profile solves: 0/400; log-weight spread 13.0 nats
+
+===== hiv p=5 K=400 =====
+                            estimate  max|theta err|  x floor        ESS    khat
+              fit() sample at same K          0.0958    11.85                nan
+                  start: fit() draws          0.0959    11.86                nan
+            precond SVGD equilibrium          0.0667     8.25                nan
+               + 1/sqrt(R) rescaling          0.0667     8.25                nan
+     + IS reweight by log p_hat (0s)          0.0289     3.58  389 (97%)    0.29
+       FLOOR: reference half-vs-half          0.0081     1.00
+   failed profile solves: 0/400; log-weight spread 1.6 nats

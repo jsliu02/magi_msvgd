@@ -1,0 +1,62 @@
+{
+ "fn": {
+  "floor": 0.010019976932110927,
+  "rows": {
+   "fit": {
+    "err": 0.0768475443503771,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "start": {
+    "err": 0.0768475443503771,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "equilibrium": {
+    "err": 0.2421945167115683,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "rescaled": {
+    "err": 0.24219451671155534,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "reweighted": {
+    "err": 0.07055220305891743,
+    "ess": 312.01541961391365,
+    "khat": -0.9456687263138008
+   }
+  }
+ },
+ "lorenz": {
+  "floor": 0.040516015355232644,
+  "rows": {
+   "fit": {
+    "err": 0.07100355815338517,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "start": {
+    "err": 0.07100355815338517,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "equilibrium": {
+    "err": 0.4013345214432321,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "rescaled": {
+    "err": 0.40133452144323295,
+    "ess": NaN,
+    "khat": NaN
+   },
+   "reweighted": {
+    "err": 0.08973206844590584,
+    "ess": 263.06379931487743,
+    "khat": -0.846876894204998
+   }
+  }
+ }
+}

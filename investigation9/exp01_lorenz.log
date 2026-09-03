@@ -1,0 +1,11 @@
+
+===== lorenz d=306 p=3 K=400 precond h=10h* lr=0.01 =====
+  |joint MAP - reference mean|, in reference sd:  theta max 1.803 mean 0.995   states max 1.374 mean 0.581
+    iter   t_theta   r_theta  t_states  r_states    thErr   SteinR  e/floor
+       0    -0.024     0.070     0.020     0.364   0.0710   1.0194     1.24
+    5000    -0.062     0.051    -0.027     0.108   0.1035   0.8939     0.79
+   25000    -0.115     0.033    -0.046     0.147   0.2020   0.7180     2.18
+   50000    -0.156     0.017    -0.052     0.196   0.2781   0.6624     2.94
+  100000    -0.221     0.024    -0.057     0.301   0.4013   0.6530     2.92
+      -1    -0.221     0.024    -0.057     0.301   0.4013   1.0737     0.96
+  (row -1 is the 1/sqrt(R) rescaling: it moves nothing, by construction)

@@ -1,0 +1,7 @@
+
+===== fn p=3 gap(theta, max) 1.029 sd  precond h=10h* lr=0.01 it=100000 =====
+     K        h*   t_theta   r_theta   align   thErr0    thErr   SteinR     sec
+   100     141.1     0.394     0.098    0.97   0.1484   0.4671   0.2800      39
+   400     108.5     0.186     0.080    0.92   0.0768   0.2422   0.7023      54
+  1600      88.1     0.051     0.039    0.80   0.0528   0.0763   0.8962     191
+  random-direction alignment in p=3 would be 0.58

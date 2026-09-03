@@ -68,8 +68,10 @@ the reference. Follow-up work reproduces that to three significant figures and l
 which is not specific to this posterior: the collapse is dimensional, and the bandwidth rule the
 method ships with makes it a factor of $0.582K/\ln K$ worse than the rule it is usually credited
 with. A corrected configuration exists and brings the ensemble to the reference's own agreement
-floor---but it degrades the parameter estimates on two of three systems, which is what the exercise
-is for, so we report it as a diagnosis rather than a recommendation.
+floor, but it degrades the parameter estimates on two of three systems, and for a reason that turns
+out to be this paper's subject: SVGD's fixed point is exact for a Gaussian target and, on one that
+is not, sits displaced along the axis from the joint mode to the posterior mean --- the very
+correction we spend the paper computing.
 \end{abstract}
 
 \section{Introduction}
@@ -728,13 +730,29 @@ the correction: energy distance $0.57$ to $0.96$ times the $K$-particle floor on
 with usable references, against $1.03$ to $1.65$ for the Gaussian draws it started from. On HIV it
 beats $400$ exact draws on a Kolmogorov--Smirnov comparison.
 
-It is still not a recommendation, and the reason is worth stating. The largest \emph{parameter}
-error goes from $0.077$ to $0.242$ on FitzHugh--Nagumo and $0.071$ to $0.401$ on Lorenz, and the
-rescaling does not repair it, because it corrects a scale and this is a location error. Only HIV
-improves ($0.096 \to 0.067$). The ensemble metric improves because it is dominated by the $322$
-trajectory states; the three numbers the exercise exists to estimate get worse. That is the same
-trade this paper declines in Section~\ref{sec:estimator}, and it is declined here for the same
-reason.
+It is not a recommendation, and the reason turns out to be the subject of this paper. The largest
+\emph{parameter} error goes from $0.077$ to $0.242$ on FitzHugh--Nagumo and $0.071$ to $0.401$ on
+Lorenz, and the rescaling cannot repair it: it corrects a scale about the ensemble's own mean, and
+this is an error \emph{in} that mean. Only HIV improves ($0.096 \to 0.067$). The ensemble metric
+improves because it is dominated by the $322$ trajectory states; the three numbers the exercise
+exists to estimate get worse, which is the trade Section~\ref{sec:estimator} declines.
+
+The displacement is not arbitrary. It lies along the axis from the joint mode to the posterior
+mean, with an alignment of $0.92$ to $0.999$ against $0.58$ for a random direction at $p=3$, and
+its size is that alignment times the distance between those two points --- which is why HIV, whose
+mode and mean are $0.15$ posterior sd apart, is barely affected while Lorenz, at $1.80$, is worst.
+It is specific to $\theta$: on FitzHugh--Nagumo the state block converges \emph{onto} the reference
+mean over the same run while $\theta$ leaves it. And it vanishes on an exactly Gaussian target ---
+the identical dynamics on $\mathcal N(\hat\mu_{\mathrm{ref}}, \hat\Sigma_{\mathrm{ref}})$ lands
+$\theta$ at $0.0045$ and $0.0351$ sd, below each reference's own Monte Carlo floor.
+
+So SVGD's fixed point is exact for a Gaussian and, on a target that is not one, sits displaced
+along exactly the mode-to-mean axis whose correction is the whole subject of
+Section~\ref{sec:correction}. It gives back the thing being estimated. Reweighting the equilibrium
+by the profiled log-density recovers parity with the deterministic pipeline
+($0.242 \to 0.071$, $0.401 \to 0.090$, $0.067 \to 0.029$, at effective sample sizes of $66$ to
+$97\%$), but that is a diagnosis rather than a rescue: what does the estimating there is the
+density, and SVGD has supplied a proposal.
 
 \emph{The Tierney--Kadane profile machinery is not worth it at the baseline density} --- correct,
 $13$\,s, no gain on the joint covariance --- but this does not extend to harder settings, where it
