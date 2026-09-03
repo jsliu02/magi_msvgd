@@ -340,9 +340,11 @@ class MAGI:
         if init_device is None:
             init_device = jax.devices()[0]
 
-        # NOTE: we may want to do initialization on the CPU because fp64
-        # is much more stable for constructing precomputed matrices,
-        # which is sometimes faster on CPU
+        # The precomputed GP matrices are built in float64: C^-1 reaches condition 1e9 once the
+        # hyperparameters are fitted properly, which is well inside float64's range and outside
+        # float32's. That needs jax's global x64 flag, so constructing a MAGI turns it ON and
+        # leaves it on. The flag is never turned OFF here -- doing so downgrades unrelated float64
+        # work elsewhere in the process, and the symptom surfaces somewhere else entirely.
         if jnp.dtype(init_dtype) == jnp.float64:
             jax.config.update("jax_enable_x64", True)
 
@@ -579,26 +581,32 @@ class MAGI:
         }
 
     def put(self, dtype=jnp.float32, device=None):
-            '''
-            Move everything to new device.
-            device : default GPU if available, else CPU (resolved lazily).
-            '''
-            if device is None:
-                device = jax.devices()[0]
-            if jnp.dtype(dtype) == jnp.float64:
-                jax.config.update("jax_enable_x64", True)
-            else:
-                jax.config.update("jax_enable_x64", False)
-            for attr, val in self.__dict__.items():
-                if attr == 'data':
-                    continue  # rebuilt from the (about-to-be-updated) top-level attrs below
-                if isinstance(val, jax.Array):
-                    if jnp.issubdtype(val.dtype, jnp.floating):
-                        val = jnp.astype(val, dtype)
-                    setattr(self, attr, jax.device_put(val, device))
-            self._sync_data()
-            self._put_called = True
-            self._invalidate()
+        """
+        Cast every array on the model to `dtype` and move it to `device`.
+
+        device defaults to jax.devices()[0], the GPU where there is one.
+
+        On jax's global x64 flag: float64 arrays cannot exist unless it is on, so asking for
+        float64 turns it on. Asking for float32 does NOT turn it off, which is what this used to
+        do -- a float32 MAGI then silently downgraded unrelated float64 work elsewhere in the same
+        process, and the symptom surfaced in whatever ran next rather than here. Leaving it on
+        costs this model nothing: every array is cast explicitly below and every kernel names its
+        dtype, so a float32 model stays float32 either way.
+        """
+        if device is None:
+            device = jax.devices()[0]
+        if jnp.dtype(dtype) == jnp.float64:
+            jax.config.update("jax_enable_x64", True)
+        for attr, val in list(self.__dict__.items()):    # setattr below mutates the dict
+            if attr == 'data':
+                continue                # rebuilt from the top-level attrs by _sync_data()
+            if isinstance(val, jax.Array):
+                if jnp.issubdtype(val.dtype, jnp.floating):
+                    val = jnp.astype(val, dtype)
+                setattr(self, attr, jax.device_put(val, device))
+        self._sync_data()
+        self._put_called = True
+        self._invalidate()
 
 
     def unpack_particles(self, particles):
