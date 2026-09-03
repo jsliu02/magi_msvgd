@@ -55,31 +55,38 @@ class GaussNewtonMAP:
         self.n_unknown = int(jnp.sum(m.unknown_sigmas))
 
         jit_eye = lambda k: jnp.eye(k, dtype=dt)
-        # The ridge has to follow the dtype. A fixed 1e-12 relative jitter is ~4500 times float64's
-        # epsilon and does its job there, but it is five orders BELOW float32's, so in single
-        # precision it is not representable against the diagonal and the factor simply comes back
-        # NaN. HIV is the case that shows it: once the hyperparameters are fitted properly its
-        # C^-1 has condition 1.3e9, well past float32's 1/eps, and every downstream residual for
-        # those two components was NaN before the mode solve had begun. So the base ridge is
-        # 4096 * eps(dtype) -- 9e-13 in float64, unchanged in effect, and 4.9e-4 in float32 --
-        # and it escalates tenfold until the factor is finite, which costs nothing when it is
-        # already finite on the first try.
-        eps = float(jnp.finfo(dt).eps)
+        # These factors define the residual, so they are ALWAYS computed in float64 and only then
+        # cast to the working dtype. Factoring them in float32 does not merely lose accuracy, it
+        # changes the problem: the ridge needed to make a float32 Cholesky of C^-1 succeed is
+        # ~5e-4 relative, and a residual built from that is the residual of a different model than
+        # magi_logdensity scores. Every float32 mode then fails the gradient check by whole
+        # standard deviations while the solver reports convergence, because it has converged --
+        # to the wrong objective. In float64 the same matrices need ~1e-12 and the two agree.
+        # m._C_invs64/_K_invs64 are snapshots taken before put() downcast anything; fall back to
+        # promoting whatever is on the model for a caller that built one by hand.
+        C64 = np.asarray(getattr(m, "_C_invs64", m.C_invs), np.float64)
+        K64 = np.asarray(getattr(m, "_K_invs64", m.K_invs), np.float64)
         self.chol_ridge = {}
         def chol(A, tag=None):
             A = 0.5 * (A + A.T)
-            scale = jnp.trace(A) / A.shape[0]
-            r = 4096.0 * eps
-            for _ in range(12):
-                L = jnp.linalg.cholesky(A + r * scale * jit_eye(A.shape[0]))
-                if bool(jnp.all(jnp.isfinite(L))):
-                    break
+            scale = np.trace(A) / A.shape[0]
+            eye = np.eye(A.shape[0])
+            r = 4096.0 * float(np.finfo(np.float64).eps)
+            for _ in range(16):
+                try:
+                    L = np.linalg.cholesky(A + r * scale * eye)
+                    if np.all(np.isfinite(L)):
+                        break
+                except np.linalg.LinAlgError:
+                    pass
                 r *= 10.0
-            if tag is not None:
-                self.chol_ridge[tag] = r
-            return L
-        self.Lc = jnp.stack([chol(m.C_invs[j], ("C", j)) for j in range(D)])   # (D, n, n) lower
-        self.Lk = jnp.stack([chol(m.K_invs[j], ("K", j)) for j in range(D)])
+            else:
+                raise RuntimeError(f'Cholesky of the GP precision {tag} failed up to a ridge of '
+                                   f'{r:.1e} relative; the matrix is not usable.')
+            self.chol_ridge[tag] = r
+            return jnp.asarray(L, dt)
+        self.Lc = jnp.stack([chol(C64[j], ("C", j)) for j in range(D)])   # (D, n, n) lower
+        self.Lk = jnp.stack([chol(K64[j], ("K", j)) for j in range(D)])
         self.b = jnp.sqrt(jnp.asarray(m.beta_inv, dt))
         # Gaussian prior on theta as a residual block: ||P^(1/2)(theta - mean)||^2 is exactly the
         # prior's contribution to -2 log p, so the least-squares form survives a full precision

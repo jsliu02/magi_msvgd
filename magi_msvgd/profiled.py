@@ -374,7 +374,7 @@ class ProfiledPosterior:
         # is not an estimate, so below the threshold the caller is told to use the Laplace
         # approximation instead. Note that with the GP hyperparameters fitted correctly this no
         # longer fires on any of the test systems in float64 -- its one live decline is hes1 in
-        # float32, at ESS 2.3%. The case that used to justify it, a posterior in which nothing was
+        # float32, at ESS 2.1%. The case that used to justify it, a posterior in which nothing was
         # identified, was an artifact of the hyperparameter bug. It is kept as a safeguard whose
         # necessity is unproven rather than one that has been demonstrated here.
         self.reliable = bool(self.ess / self.n_nodes >= 0.10

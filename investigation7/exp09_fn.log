@@ -4,3 +4,5 @@
            fit() [the incumbent]   0.07579     2.52   0.2389   1.091    95.7
       START: Laplace theta draws   0.64403    21.37   1.1897   0.907     0.0
          profiled SVGD, standard   0.00894     0.30   0.0118   0.931  1883.9
+       profiled SVGD, reweighted   0.01479     0.49   0.0159   1.010  1130.3
+           FLOOR: 64 exact draws   0.03013     1.00   0.0100   1.000

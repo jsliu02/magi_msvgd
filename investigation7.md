@@ -22,6 +22,14 @@ Code in `investigation7/`. Systems and references are reused, not rebuilt:
 `investigation5/setup5.py` (via the `setup7.py` symlink) and `investigation5/ref5_*.npz`,
 96,000 NUTS draws each, rebuilt after the GP fix.
 
+> **Reading order.** This was written as it happened, so two of its own conclusions are
+> overturned later in the document. Sections 2-5 establish that the failure is real, is not about
+> MAGI, and follows `Var/Var_target = ln(K)/d`; **section 6 then shows the cause is the
+> median-heuristic bandwidth rather than the dimension**, section 9 tests that on the real
+> posteriors, section 10 places it against the literature (the `1/d` scaling is a known theorem;
+> the `ln K` is not), and section 11 gives the one setting in which mSVGD beats the incumbent.
+> Section 13 is the summary. If you want the answer rather than the route, read 13 first.
+
 ## 0. Ground rules
 
 **hes1 is excluded from every quantitative statement.** Its reference is R-hat 1.76 with 13%
@@ -264,6 +272,12 @@ therefore sit on the same code path as the shipped library.
 law. Target `N(0, I_d)` throughout — isotropic, so nothing is left for a preconditioner to fix and
 the equilibrium variance ratio is directly the number SVGD gets wrong. Started at exact draws, so
 there is no burn-in to mistake for an equilibrium. Prodigy, 2000 iterations.
+
+> **Read section 10 alongside this one.** The `Θ(1/d)` part of what follows is a known theorem
+> (Ba et al., ICLR 2022), and it was measured here before that was checked. What is specific to
+> this report is the `ln K` numerator, which belongs to the `h = Med/log K` bandwidth rule the
+> library ships and not to the `h = Med` rule the theorem is stated for. `exp13_vs_theory.py`
+> reproduces both, in the same harness, to within 1%.
 
 Standard RBF kernel, mean variance ratio:
 
@@ -594,6 +608,23 @@ arXiv version) prove, for an isotropic Gaussian target in the proportional limit
 > **Corollary 4.** `v_SVGD = (e − 1)^{-1} γ^{-1}`, i.e. **0.5820 · n/d**, whereas MMD-descent
 > gives `v_MMD = 1`.
 
+(Their result is conditional on an unproven near-orthogonality assumption on the particle
+configuration, which they verify numerically rather than prove.)
+
+**So the `1/d` scaling is theirs, not this report's, and section 5 should not have presented it as
+a discovery.** What differs is the `n`-dependence and the constant, and the reason is that the two
+bandwidth rules are different:
+
+| | bandwidth | law | at K = 400, d = 800 |
+|---|---|---|---|
+| Ba et al. 2022, Cor. 4 | `h = Med` | `0.582 · n/d` | 0.291 |
+| this report, sections 5 & 8 | `h = Med / ln K` (what `msvgd` ships) | `ln(K) / d` | 0.0075 |
+
+Same `1/d`; **linear in `n` versus logarithmic in `K`**, which at K = 400 is a factor of 39 and at
+K = 4000 a factor of 281. Neither law dominates the other as a matter of form -- they describe two
+different algorithms -- but on any particle budget anyone would actually use, `0.582 n` is far
+larger than `ln K`, so the shipped rule is the worse of the two.
+
 `msvgd.MSVGD.pairwise_distance` implements the *other* convention — Liu & Wang (NeurIPS 2016)
 recommend `h = Med / log n`, and that is what the library uses. So the two laws should differ, and
 `investigation7/exp13_vs_theory.py` runs both conventions through the same harness:
@@ -641,12 +672,13 @@ bandwidth has the *right* fixed point and merely reaches it slowly — which is 
 measured: correct variance from every start in section 6, and in section 9 a correct answer from a
 well-scaled start but not (within 2000 iterations) from a 4×-too-narrow one.
 
-To my knowledge the following are not in the literature; the search that produced the citations
-above found no source for any of them, and they should be treated as this report's own
-measurements rather than as established results:
+The `Θ(1/d)` collapse is established; the following are not, on the evidence of the literature
+search behind the citations here, and should be read as this report's own measurements rather than
+as known results:
 
-* the `ln(K)/d` law for the `h = Med/log n` convention, and the 39× penalty it carries against
-  the plain median heuristic;
+* the `ln(K)/d` law for the `h = Med/log n` convention — the scaling in `d` is Ba et al.'s, the
+  `ln K` in place of their `0.582 n` is not — and the 39× penalty it carries against the plain
+  median heuristic;
 * the observation that the median heuristic's equilibrium pins `h → 2` in units where the target
   has unit variance (`exp08` measures 1.79–2.26 across d = 50–325 and K = 10–3200);
 * that a fixed `h ≳ 100 d` restores the variance to 0.93–0.99 and the *energy distance* to below
@@ -668,4 +700,188 @@ h-SVGD, *Convergence Aspects of Hybrid Kernel SVGD*, TMLR 2025 (OpenReview `JZkb
 uses different kernels in the drift and repulsion terms, improves variance empirically, and
 **proves it does not converge to the target in the mean-field limit** — a useful reminder that
 "fixes the variance" and "has a convergence guarantee" are independent claims here.
+
+## 11. Where mSVGD actually works: the profiled p-dimensional marginal
+
+`investigation7/exp09_profiled_svgd.py`. Section 5's law is a statement about dimension, and
+MAGI's dimension is a choice. The joint is `p + nD` = 306–608. The parameter block is `p` = 3–7,
+where exp07 measures a variance ratio of 0.83–0.99 — SVGD's *good* regime. And
+`profiled.ProfiledPosterior` already supplies the p-dimensional profiled log marginal
+
+    log p̂(θ) = log p(θ, X*(θ)) − ½ log det H_XX(θ),
+
+whose inner solve is a `jax.lax.scan` of Cholesky solves and is therefore differentiable. So SVGD
+can be run on it directly, with autodiff gradients through the profile.
+
+FitzHugh–Nagumo, p = 3, K = 64 particles, 400 iterations, cold start from Laplace θ draws at the
+joint MAP (no knowledge of the answer):
+
+| variant | θ energy | × floor | max\|θ err\| | sd ratio | sec |
+|---|---|---|---|---|---|
+| start: Laplace θ draws at the MAP | 0.6440 | 21.4 | 1.190 | 0.907 | — |
+| `fit()` (the incumbent), K = 64 | 0.0758 | 2.52 | 0.239 | 1.091 | 96 |
+| **profiled SVGD, standard RBF** | **0.00894** | **0.30** | **0.0118** | 0.931 | 1884 |
+| profiled SVGD, reweighted | 0.01479 | 0.49 | 0.0159 | 1.010 | 1130 |
+| FLOOR: 64 exact reference draws | 0.03013 | 1.00 | 0.0100 | 1.000 | — |
+
+**Both kernels beat 64 exact draws**, by 2–3×, and the parameter mean lands at 0.012 reference sd
+against the reference chain's own half-vs-half floor of 0.010. Same library, same default
+bandwidth, same median heuristic — the only change is that the 322 state coordinates are
+integrated out analytically instead of being carried as particles.
+
+Lorenz, p = 3, same settings:
+
+| variant | theta energy | x floor | max abs theta err | sd ratio | sec |
+|---|---|---|---|---|---|
+| start: Laplace theta draws at the MAP | 1.3682 | 50.8 | 1.953 | 0.843 | -- |
+| `fit()`, K = 64 | 0.0416 | 1.55 | 0.175 | 1.010 | 9.5 |
+| **profiled SVGD, standard RBF** | **0.00960** | **0.36** | **0.0267** | 0.962 | 792 |
+| profiled SVGD, reweighted | 0.8751 | 32.5 | 1.013 | 1.579 | 665 |
+| FLOOR: 64 exact reference draws | 0.02693 | 1.00 | 0.0405 | 1.000 | -- |
+
+The standard kernel replicates: below the K = 64 floor, and a theta error of 0.027 against the
+reference chain's own half-vs-half floor of 0.041, i.e. below the resolution of the reference
+itself. **The reweighted kernel fails here** -- 32.5x the floor, barely moved from a start at
+50.8x, with the spread 58% too wide. So the ranking of the two kernels inverts once the dimension
+is small enough for either to work: the density reweighting exists to fight collapse, and where
+there is no collapse to fight it is only a distortion. That is worth stating because every
+comparison earlier in this report had the reweighted kernel ahead.
+
+That is what the dimension law predicts, and it is the constructive half of this investigation:
+**mSVGD's problem on MAGI is not mSVGD, it is being asked to carry a 300-to-600-dimensional state
+vector as particles when that state vector has a closed-form conditional.**
+
+The cost is the catch. 1884 s against `fit()`'s 96 s in the same contended run (12 s uncontended),
+because every gradient backpropagates through three Gauss-Newton steps and a Cholesky of the
+322×322 state block, for each of 64 particles, 400 times. Roughly 20–30× `fit()` for a 2.5–8×
+better answer on a p = 3 problem. Whether that trade is worth taking is a judgement, but it is a
+real trade, which nothing else in this report offers.
+
+## 12. Experiment 5, explicitly: neither the GP fix nor the integrator matters
+
+`investigation7/exp05_whatchanged.py`. The 2x2 of {RK4, forward Euler} x {fixed GP fit, the
+pre-fix `fit_phisigma` reconstructed read-only in `investigation7/oldgp.py`} on FitzHugh-Nagumo,
+started at `fit()` draws, 1000 iterations. Scoring is deliberately reference-free, since only one
+cell has a reference: Stein R, and the band profile taken against each cell's own Laplace
+covariance.
+
+| cell | l/dt | Stein R, standard | Stein R, reweighted | band profile, standard |
+|---|---|---|---|---|
+| rk4 / fixed GP | 13.2, 12.5 | **0.0194** | 0.189 | 0.17 0.05 0.03 0.006 0.000 |
+| rk4 / OLD GP | 13.4, 12.5 | **0.0192** | 0.207 | 0.17 0.09 0.03 0.015 0.000 |
+| euler / fixed GP | 13.3, 12.5 | **0.0193** | 0.187 | 0.17 0.05 0.03 0.006 0.000 |
+| euler / OLD GP | 13.4, 12.5 | **0.0193** | 0.223 | 0.17 0.10 0.03 0.015 0.000 |
+
+Stein R agrees to three significant figures in all four cells, and the band profiles are
+indistinguishable. The premise is confirmed on the way past: FitzHugh-Nagumo's GP fit really was
+unaffected by the bug (l/dt = 13.4 before the fix, 13.2 after, against the failures of 0.001-0.16
+that investigation 6 sec. 8 found on HIV and Hes1), and the integrator changes nothing either.
+
+So the answer to "was investigation 4's result an artefact of the GP bug or of the data change?"
+is **neither**. It was a property of the algorithm's bandwidth rule and the problem's dimension,
+both of which are unchanged by either fix.
+
+## 13. Conclusions
+
+### Does investigation 4's negative result survive?
+
+**Yes, unchanged.** On FitzHugh-Nagumo the standard kernel reproduces to three significant figures
+(energy 6.847 vs 6.895, Stein R 0.0194 vs 0.0190) and the reweighted kernel to 10-20%, including
+its 0.99 sd ratio. The 2x2 of {RK4, Euler} x {fixed GP, old GP} in section 12 gives Stein R
+0.0192-0.0194 in every cell. Neither the GP hyperparameter fix nor the integrator change touches
+this result. It extends to the two systems investigation 4 never tested, and HIV -- the
+best-conditioned of the four, with a zero-divergence reference -- is the worst of the three.
+
+### But the diagnosis in investigation 4 was wrong, in a way that matters
+
+It called the failure **anisotropic collapse**, and inferred that from Stein R alone. Two
+measurements contradict that as a *cause*:
+
+* On a plain `N(0, I)` in the same dimension, with no MAGI anywhere in it, SVGD started at exact
+  draws collapses to a flat 1.8% of the correct variance in every direction -- 89x the floor, the
+  same as on the real posterior. Perfect isotropy does not help, which is also why preconditioning
+  with the exact Hessian does not (section 3: it is the worst of the four kernels on fn).
+* The collapse follows `Var/Var_target = ln(K)/d` on an isotropic Gaussian, over d from 50 to 608
+  and K from 10 to 3200, to three decimals.
+
+Anisotropy is real on the MAGI posteriors -- section 4 measures contraction rates differing by
+23x on fn, 27x on lorenz and 4.2e6 on HIV -- but it decides *which* directions go first, not
+whether they go. The cause is the bandwidth rule and the dimension.
+
+### The mechanism, and the part that changes what should be done
+
+The median heuristic sets `h = median(||x-y||^2) / ln K` **from the ensemble**, so as the ensemble
+contracts the bandwidth contracts with it, and the loop terminates at `h ~= 2` in units where the
+target has unit variance (measured 1.79-2.26 across all d and K). Two consequences:
+
+1. **Deleting the `1/ln K`** -- the Liu & Wang (2016) convention the library follows -- recovers
+   the `0.582 n/d` law that Ba et al. prove for the plain median heuristic. At K = 400 that is a
+   **39x** improvement in variance fidelity for a one-line change (`exp13`, both laws confirmed to
+   within 1% in the same harness). Still `O(1/d)`, so not a cure.
+2. **Fixing the bandwidth at `h ~ 100 d`** -- two orders of magnitude beyond the `sigma = sqrt(d)`
+   that Ba et al. tested and rejected -- gives the flow the *correct* fixed point `v = 1`
+   (heuristic expansion in section 10, confirmed by measurement). On `N(0, I_325)` with K = 400
+   the ensemble converges from 0.05x to 2x the correct spread to a variance ratio of 0.93-0.99 and
+   an energy distance **0.52x the K-particle Monte-Carlo floor**. On the real 306- and
+   325-dimensional MAGI posteriors, at `h = 1000 h0`, energy 0.052 and 0.069 against floors of
+   0.078 and 0.082 -- also below the floor.
+
+I wrote the prediction that a large fixed bandwidth would only work by freezing the ensemble, and
+the control written to demonstrate that disproved it. That is recorded in section 6 as it happened.
+
+### What I would actually recommend
+
+1. **Do not use mSVGD on the joint MAGI posterior as it ships.** From a cold start it lands at
+   80-190x the energy floor on all three systems, mitosis does not help, 10x the compute does not
+   help, and it is not faster than `fit()`, which is 60-190x more accurate, nor much faster than
+   the 96,000-draw NUTS reference itself.
+2. **If mSVGD is kept, run it on the profiled p-dimensional marginal.** Section 11: on fn and
+   lorenz, SVGD on `log p_hat(theta)` with 64 particles reaches **0.30x and 0.36x** the 64-draw
+   energy floor and a theta error of 0.012-0.027 against reference floors of 0.010-0.041 --
+   better than `fit()` by 2.5-8x on the same quantity. It costs 20-80x `fit()`'s wall clock, and
+   the reweighted kernel must not be used there (it fails on lorenz, 32x the floor).
+3. **Change the default bandwidth rule, or expose it.** The `1/ln K` costs 39x at K = 400 for
+   nothing, and `bandwidth` is already an argument -- what is missing is any indication that the
+   default is catastrophic above a few dimensions. Stein R tracks the bandwidth sweep
+   monotonically (0.027 -> 0.33 -> 0.75 -> 0.97 on fn) and needs no reference, so "raise h until
+   R ~ 1" is an obvious tuning rule.
+4. **`_stein_R` should be reported by default and its target value documented.** It was the one
+   diagnostic in the old code that saw this failure, and it reads 0.02 where the marginal standard
+   deviations read 0.99.
+
+### Traps, restated because they cost time here
+
+* **Marginal standard deviations are worthless as a score.** The reweighted kernel ends at sd
+  ratio 0.994 (fn) and 1.031 (lorenz) while sitting 50-60x the energy floor. Credible intervals
+  drawn from those ensembles would look perfect.
+* **Stein R averaged over all coordinates is dominated by the state block.** On HIV the
+  exact-Hessian preconditioner reports R = 0.974 with a theta error of 2.8 reference sd against a
+  floor of 0.008.
+* **Every distance needs a floor at the ensemble's own K.** On fn, 2000 exact draws score 0.037
+  and 400 exact draws score 0.082 -- a 2.2x difference that is pure Monte-Carlo error.
+* **The whitened eigenvalue spectrum is uninformative at K ~ d.** For 4000 reference draws in
+  d = 325 it already spans 0.52-1.64 from Marchenko-Pastur alone. The band profile (variance ratio
+  along the reference covariance's own fixed eigenvectors) is unbiased at any K and was the
+  diagnostic that made the anisotropy question answerable.
+
+### What is not settled
+
+* **How to choose the bandwidth without a reference.** The 1000x multiplier in section 9 came from
+  a sweep scored against the reference. The Stein-R rule above is untested.
+* **Whether the large-h regime is a sampler or only a polisher.** In section 9 it converges from a
+  correctly-scaled start but not, within 2000 iterations, from one 4x too narrow. Section 6 shows
+  it does converge on an isotropic target given 5000 iterations, so this may be only a budget
+  question -- but it was not measured on the MAGI posteriors.
+* **Whether below-the-floor energy at large h means the answer is right, or only that the
+  ensemble is quasi-uniform.** Both are consistent with the data.
+* **hes1** is untouched throughout: R-hat 1.76, 13% divergences, no usable reference.
+* **The profiled-SVGD result is two systems and one particle count.** K = 64, 400 iterations, no
+  sweep over either, and no run on HIV (p = 5, nD = 603, so roughly 8x the per-gradient cost).
+
+### Note on the code that moved underneath this
+
+All measurements here are float64 (`setup7.build(..., dtype=jnp.float64)`; `fit()` inherits it
+because `put()` has been called). The `gauss_newton.py` Cholesky-ridge change made during this
+investigation takes the float64 ridge from a fixed 1e-12 to `4096 * eps` = 9.1e-13, so nothing
+above is affected by it; the reported float32 concern does not touch any number in this report.
 

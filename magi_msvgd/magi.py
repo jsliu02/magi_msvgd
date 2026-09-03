@@ -398,6 +398,17 @@ class MAGI:
         self.ms = initializations[5] # (d, n, n)
         self.K_invs = initializations[6] # (d, n, n)
 
+        # Float64 snapshots of the two GP precision matrices, taken before any put() downcasts
+        # them. The Gauss-Newton residual is defined through their Cholesky factors, so those
+        # factors have to be computed accurately even when the iteration itself runs in float32 --
+        # otherwise the least-squares problem being solved is not the one magi_logdensity scores,
+        # and the mode it finds fails the gradient check by standard deviations. C^-1 in particular
+        # is badly conditioned once the hyperparameters are fitted properly (1.3e9 on HIV), which
+        # is well inside float64's range and well outside float32's. These are numpy, not jax
+        # arrays, so put() leaves them alone; they cost (D, n, n) doubles, under a megabyte here.
+        self._C_invs64 = np.asarray(self.C_invs, np.float64)
+        self._K_invs64 = np.asarray(self.K_invs, np.float64)
+
         self.particles_init = jnp.concatenate([self.theta_init, self.x_init.flatten(), self.sigmas[self.unknown_sigmas]])
         # tracks whether the user has explicitly chosen a dtype/device via put() -- if not,
         # the pipeline will default to float32 for speed. Single precision is safe here: the

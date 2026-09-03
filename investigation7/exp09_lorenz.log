@@ -1,0 +1,8 @@
+
+===== lorenz  p=3  K=64  maxit=400 =====
+                         variant  thEnergy  x floor    thErr   sdrat     sec
+           fit() [the incumbent]   0.04164     1.55   0.1749   1.010     9.5
+      START: Laplace theta draws   1.36821    50.80   1.9534   0.843     0.0
+         profiled SVGD, standard   0.00960     0.36   0.0267   0.962   791.5
+       profiled SVGD, reweighted   0.87510    32.49   1.0129   1.579   665.3
+           FLOOR: 64 exact draws   0.02693     1.00   0.0405   1.000

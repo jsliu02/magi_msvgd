@@ -89,16 +89,27 @@ class DynamicalSystem:
         return np.unique(np.concatenate(self.hyperparams["tau"] + [np.empty(0)]))
 
     def _locate(self, times, grid, what="time"):
-        """Index of the nearest grid point, erroring if the gap is larger than rounding."""
+        """
+        Index of the nearest grid point, erroring if the gap is larger than rounding.
+
+        The tolerance is a fraction of the grid SPACING, not an absolute constant. An absolute
+        1e-9 is the same mistake this suite is otherwise careful about: it is a number with units,
+        and the round-off it has to absorb scales with the magnitude of t and with the precision
+        of whatever produced it. A caller passing a float32 grid -- `magi.I` after `put(float32)`,
+        say -- is off by ~1e-7 relative, which is 1e-5 absolute at t = 240 and fails an absolute
+        1e-9 outright. A fraction of the spacing is unit-free and still strict: a time wrong by a
+        whole grid step is a thousand times the tolerance.
+        """
         times, grid = np.asarray(times, np.float64), np.asarray(grid, np.float64)
         j = np.clip(np.searchsorted(grid, times), 1, len(grid) - 1)
         j = np.where(np.abs(grid[j - 1] - times) <= np.abs(grid[j] - times), j - 1, j)
         gap = np.abs(grid[j] - times)
-        tol = 1e-9 * np.maximum(1.0, np.abs(times))
+        step = np.min(np.diff(grid)) if len(grid) > 1 else 1.0
+        tol = 1e-3 * abs(step)
         if np.any(gap > tol):
-            bad = times[np.argmax(gap)]
-            raise ValueError(f"{what} {bad!r} is not on the grid (nearest is "
-                             f"{grid[j[np.argmax(gap)]]!r})")
+            k = int(np.argmax(gap))
+            raise ValueError(f"{what} {times[k]!r} is not on the grid (nearest is {grid[j[k]]!r}, "
+                             f"off by {gap[k]:.3g} against a tolerance of {tol:.3g})")
         return j
 
     # ------------------------------------------------------------------ integration
@@ -120,15 +131,13 @@ class DynamicalSystem:
         if t_max is not None:
             out_times = out_times[out_times <= t_max]
 
-        x0 = jnp.asarray(hp["x0"])
-        theta = jnp.asarray(hp["theta"], x0.dtype)
-        f = lambda x, t: jnp.asarray(self.ode(x, theta, t)).reshape(x0.shape)
         advance = _STEPPERS[method]
 
         t0 = float(out_times[0])
         dts = np.diff(out_times)
         if len(dts) == 0:
-            self.T, self.solution = out_times, np.asarray(x0)[None, :]
+            self.T = out_times
+            self.solution = np.asarray(hp["x0"], np.float64)[None, :]
             return self.T, self.solution
         # one static substep count for the whole scan; the substep size varies per interval so
         # that every output time is reached exactly
@@ -143,8 +152,16 @@ class DynamicalSystem:
             (x, t), _ = jax.lax.scan(sub, (x, t), None, length=nsub)
             return (x, t), x
 
-        (_, _), traj = jax.lax.scan(interval, (x0, jnp.asarray(t0, x0.dtype)),
-                                    jnp.asarray(dts, x0.dtype))
+        # Always in float64. This is the reference every error in the suite is measured against,
+        # so its accuracy must not depend on whether the caller happens to have jax's x64 flag on
+        # -- and with it off, jnp.asarray of a float64 array silently gives float32, which at a
+        # 1e-3 step accumulates more error than the observation noise it is being compared with.
+        with jax.enable_x64():
+            x0 = jnp.asarray(hp["x0"], jnp.float64)
+            theta = jnp.asarray(hp["theta"], jnp.float64)
+            f = lambda x, t: jnp.asarray(self.ode(x, theta, t)).reshape(x0.shape)
+            (_, _), traj = jax.lax.scan(interval, (x0, jnp.asarray(t0, jnp.float64)),
+                                        jnp.asarray(dts, jnp.float64))
         self.T = out_times
         self.solution = np.asarray(jnp.concatenate([x0[None, :], traj], axis=0), np.float64)
         self._integration = dict(step=step, method=method, nsub=nsub,
@@ -216,12 +233,12 @@ def fn_ode(X, theta, t=None):
 
 FitzHughNagumo = DynamicalSystem(fn_ode,
     {
-        "theta" : jnp.array([0.2, 0.2, 3.0]),
-        "x0" : jnp.array([-1.0, 1.0]),
-        "sigma" : jnp.array([0.2, 0.2]),
-        "tau" : [jnp.linspace(0, 20, 41),
-                   jnp.linspace(0, 20, 41)],
-        "I" : jnp.linspace(0, 20, int(160 +1))
+        "theta" : np.array([0.2, 0.2, 3.0]),
+        "x0" : np.array([-1.0, 1.0]),
+        "sigma" : np.array([0.2, 0.2]),
+        "tau" : [np.linspace(0, 20, 41),
+                   np.linspace(0, 20, 41)],
+        "I" : np.linspace(0, 20, int(160 +1))
     }
 )
 
@@ -236,13 +253,13 @@ def hes1_ode(X, theta, t=None):
 
 Hes1 = DynamicalSystem(hes1_ode,
     {
-        "theta" : jnp.array([0.022, 0.3, 0.031, 0.028, 0.5, 20, 0.3]),
+        "theta" : np.array([0.022, 0.3, 0.031, 0.028, 0.5, 20, 0.3]),
         "x0" : np.log([1.438575, 2.037488, 17.90385]),
-        "sigma" : jnp.array([0.15, 0.15, jnp.nan]),
-        "tau" : [jnp.linspace(0, 240, int(240/15 +1)),
-           jnp.linspace(7.5, 232.5, int((232.5-7.5)/15 +1)),
-           jnp.array([])],
-        "I" : jnp.linspace(0, 240, int(240/7.5 +1))
+        "sigma" : np.array([0.15, 0.15, np.nan]),
+        "tau" : [np.linspace(0, 240, int(240/15 +1)),
+           np.linspace(7.5, 232.5, int((232.5-7.5)/15 +1)),
+           np.array([])],
+        "I" : np.linspace(0, 240, int(240/7.5 +1))
     }
 )
 

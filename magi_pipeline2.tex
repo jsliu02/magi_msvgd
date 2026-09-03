@@ -220,9 +220,9 @@ suite in $6$ to $35$ iterations where an absolute tolerance ran to the cap:
 & \multicolumn{2}{c}{fn} & \multicolumn{2}{c}{hes1} & \multicolumn{2}{c}{hiv} & \multicolumn{2}{c}{lorenz}\\
 & f64 & f32 & f64 & f32 & f64 & f32 & f64 & f32\\
 \midrule
-iterations & 17 & 15 & 16 & 42 & 4 & 4 & 31 & 37\\
-$\lambda_{\mathrm{N}}$ & 6.3e-4 & 1.7e-3 & 2.0e-4 & 2.2e-4 & 6.7e-6 & 5.7e-4 & 8.8e-4 & 3.9e-3\\
-$\|\nabla\log p\|$ & 2.6e-3 & 1.0e-2 & 1.1e-2 & 8.4e-2 & 3.7e-4 & 3.6e-2 & 5.1e-4 & 5.2e-3\\
+iterations & 17 & 22 & 16 & 16 & 4 & 4 & 31 & 34\\
+$\lambda_{\mathrm{N}}$ & 6.3e-4 & 1.6e-3 & 2.0e-4 & 1.6e-3 & 6.7e-6 & 4.1e-4 & 8.8e-4 & 3.5e-3\\
+$\|\nabla\log p\|$ & 2.6e-3 & 8.0e-3 & 1.1e-2 & 1.4e-1 & 3.7e-4 & 1.0e-2 & 5.1e-4 & 5.5e-3\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -231,31 +231,47 @@ A scale-free tolerance still has a precision floor, so the iteration also stops 
 otherwise float32 spends its remaining budget whenever the requested tolerance happens to sit
 below what the format can deliver. The table makes the case for reporting $\lambda_{\mathrm{N}}$
 rather than $\|\nabla\log p\|$ in one line: read the gradient norms alone and Hes1 in float32
-($8.4\times10^{-2}$) looks like the worst-converged run in the suite by two orders of magnitude,
-while its decrement, $2.2\times10^{-4}$, is the second best. The gradient norm is reporting the
+($1.4\times10^{-1}$) looks like the worst-converged run in the suite by more than an order of
+magnitude, while its decrement, $1.6\times10^{-3}$, is unremarkable. The gradient norm is reporting the
 units of Hes1's $\theta$ block, whose curvature spans $10^{2}$ to $10^{7}$; the decrement divides
 them out.
 
 Every entry here reaches the tolerance, including HIV in float32, which until recently could not
-run in single precision at all. Its GP covariances factored to NaN, so every residual for two of
-its three components was NaN before the first step. The cause was a fixed $10^{-12}$ relative
-ridge on the Cholesky---about $4500$ times float64's epsilon, and five orders \emph{below}
-float32's, so in single precision it was not representable against the diagonal it was meant to
-lift. Once the hyperparameters were fitted correctly HIV's $C^{-1}$ had condition $1.3\times10^{9}$
-and that was enough to expose it. The ridge now follows the dtype. It is the same error as
-everywhere else in this paper, in its purest form: a constant that had been calibrated against one
-scale and was being applied to another.
+run in single precision at all: its GP covariances factored to NaN, so every residual for two of
+its three components was NaN before the first step. Once the hyperparameters were fitted correctly
+HIV's $C^{-1}$ had condition $1.3\times10^{9}$, comfortably inside float64's range and two orders
+outside float32's.
+
+Our first repair was to scale the Cholesky ridge with the working precision, which made the NaN go
+away and was wrong. The factors \emph{define} the residual---$L_cL_c^\top = C^{-1}$ in
+\eqref{eq:residual}---so a ridge large enough to rescue a float32 factorisation, $4.9\times10^{-4}$
+relative, does not stabilise the solve but replaces the model. The solver then converged accurately
+to the mode of something else: every float32 mode in the suite failed the gradient check by between
+$0.4$ and $15$ posterior standard deviations while reporting convergence, because it had converged.
+
+The correct repair is that the factorisation is preprocessing and its precision is not the
+iteration's to choose. The two GP precision matrices are factored in float64---from snapshots taken
+before anything is cast down---and only the resulting triangular factors are moved to the working
+dtype. The ridge is then $9\times10^{-13}$ in both precisions, HIV factors cleanly, and every
+float32 mode passes. We record the false start because the failure it produced is the kind this
+paper is about: a diagnostic correctly reporting a disagreement, and the disagreement being with a
+model we had altered without meaning to.
 
 \begin{remark}[A recurring theme]
-This is the fifth place in this paper where a quantity with units was being compared against an
+This is the fourth place in this paper where a quantity with units was being compared against an
 absolute threshold, after the conditioning of the normal equations (Section~\ref{sec:solver}), the
-detection of flat directions (Section~\ref{sec:diagnosis}), the finite-difference step
-(Section~\ref{sec:stencil}) and the Cholesky ridge just above. Two more follow: the agreement test
-between restarts (Section~\ref{sec:diagnosis}) and, worst of all, the starting point of the
-hyperparameter optimiser (Section~\ref{sec:gp}). In each case the fix is to divide by the relevant
-scale---the diagonal of $A$, the diagonal of $H$, the posterior standard deviation, machine
-epsilon, the data's own variance---and in each case the unscaled version worked on the benchmark
-it was developed on and failed elsewhere.
+detection of flat directions (Section~\ref{sec:diagnosis}) and the finite-difference step
+(Section~\ref{sec:stencil}). Two more follow: the agreement test between restarts
+(Section~\ref{sec:diagnosis}) and, worst of all, the starting point of the hyperparameter optimiser
+(Section~\ref{sec:gp}). In each case the fix is to divide by the relevant scale---the diagonal of
+$A$, the diagonal of $H$, the posterior standard deviation, the data's own variance---and in each
+case the unscaled version worked on the benchmark it was developed on and failed elsewhere.
+
+The Cholesky ridge just above is the instructive exception. It has exactly the same shape---a
+constant calibrated against float64 being applied in float32---and scaling it to the dtype is the
+obvious move and the wrong one, because that constant is not a tolerance being compared against
+anything. It is a perturbation of the model. Recognising which of the two a magic number is
+matters more than recognising that it is one.
 \end{remark}
 
 \section{The missing prior}
@@ -695,7 +711,7 @@ report the Laplace approximation.
 
 We should be candid that the gate no longer fires on this suite in double precision: after the
 hyperparameter fit all four systems pass it, Hes1 least comfortably at $21\%$. Its one live decline is Hes1 in float32, at
-$\mathrm{ESS} = 2.3\%$. The case that used to justify it---a
+$\mathrm{ESS} = 2.1\%$. The case that used to justify it---a
 posterior where nothing was identified, the mode already sat at the reference mean, and profiling
 made matters worse---was an artifact of the broken hyperparameters and no longer exists. We keep
 the gate because the failure it guards against is real and cheap to check for, not because we can
@@ -853,12 +869,13 @@ selecting a step an octave or two larger to stay clear of its own round-off floo
 (Table~\ref{tab:chosen}).
 
 The exception is Hes1, and it is a real one: single precision takes its effective sample size from
-$21\%$ to $2.3\%$ and the gate declines. This is not the stencil---both precisions pick a step
-inside the same plateau---but the funnel of Section~\ref{sec:funnel} interacting with the ridge the
-Cholesky needs in float32, which is $4.9\times10^{-4}$ relative against $9\times10^{-13}$ in
-float64. On a posterior whose curvature varies by six orders of magnitude that ridge is not
-uniformly negligible. The honest summary is therefore narrower than we first wrote it: use single
-precision, and expect the gate to catch the case where it is not enough.
+$21\%$ to $2.1\%$ and the gate declines. It is not the stencil---both precisions pick a step inside
+the same plateau---and we are not able to attribute it further. Hes1 is the system with the funnel
+(Section~\ref{sec:funnel}), so the curvature the inner solves and the log-determinant see varies by
+six orders of magnitude across the nodes, and float32 has less margin to absorb that; but HIV's
+Hessian is worse conditioned at the mode and single precision helps it, so conditioning alone is
+not the story and we have not isolated what is. The honest summary is narrower than we first wrote
+it: use single precision, and expect the gate to catch the case where it is not enough.
 
 \begin{table}[t]
 \centering\small
@@ -867,10 +884,10 @@ precision, and expect the gate to catch the case where it is not enough.
 system & \multicolumn{2}{c}{chosen $h/\mathrm{sd}$} & \multicolumn{2}{c}{plateau} & \multicolumn{2}{c}{ESS}\\
 & f64 & f32 & f64 & f32 & f64 & f32\\
 \midrule
-fn     & 0.1  & 1.6  & 0.01--1.6  & 0.4--6.4$^\ast$  & 75.7\% & 75.8\%\\
-hiv    & 0.2  & 1.6  & 0.01--6.4$^\ast$ & 0.4--6.4$^\ast$ & 63.4\% & 79.4\%\\
-lorenz & 0.1  & 0.4  & 0.01--0.8  & 0.2--0.8   & 67.5\% & 72.4\%\\
-hes1   & 0.05 & 0.1  & 0.01--0.4  & 0.02--0.4  & 21.1\% & \textbf{2.3\%}\\
+fn     & 0.1  & 0.8  & 0.01--1.6  & 0.2--1.6   & 75.7\% & 76.0\%\\
+hiv    & 0.2  & 1.6  & 0.01--6.4$^\ast$ & 0.4--6.4$^\ast$ & 63.4\% & 71.8\%\\
+lorenz & 0.1  & 0.4  & 0.01--0.8  & 0.2--0.8   & 67.5\% & 67.9\%\\
+hes1   & 0.05 & 0.1  & 0.01--0.4  & 0.05--0.4  & 21.1\% & \textbf{2.1\%}\\
 \bottomrule
 \end{tabular}
 \caption{Steps selected automatically, and the plateaus they were selected from, after the
@@ -1044,17 +1061,23 @@ instructive: it did not make the method fail, it made it succeed at fitting the 
 and every certificate we had built agreed that the fit was good. What caught it was plotting the
 trajectories.
 
-A pattern runs through all of them. Seven separate quantities in this pipeline were being compared
+A pattern runs through all of them. Six separate quantities in this pipeline were being compared
 against absolute thresholds while carrying units: the conditioning of the normal equations, the
 eigenvalues used to detect flat directions, the finite-difference step, the convergence test, the
-agreement test between restarts, the ridge added before a Cholesky, and the starting point of the
-hyperparameter optimiser. Each worked on the problem it was developed on and failed on another,
-and in every case the repair was the same---divide by the scale that the quantity is measured in,
-and the threshold becomes a statement about the posterior rather than about the units. It is a
-dull principle, and it accounted for more of the difficulty here than any of the approximation
-theory. The last of the seven is the one to remember, because it did not announce itself as a
-numerical problem at all: it produced a posterior that was internally consistent, passed every
-certificate we had, and answered a different question than the one asked.
+agreement test between restarts, and the starting point of the hyperparameter optimiser. Each
+worked on the problem it was developed on and failed on another, and in every case the repair was
+the same---divide by the scale that the quantity is measured in, and the threshold becomes a
+statement about the posterior rather than about the units. It is a dull principle, and it accounted
+for more of the difficulty here than any of the approximation theory. The last of the six is the
+one to remember, because it did not announce itself as a numerical problem at all: it produced a
+posterior that was internally consistent, passed every certificate we had, and answered a different
+question than the one asked.
+
+The seventh constant, the ridge before a Cholesky, is worth keeping beside them as a warning
+against applying the principle mechanically. It looks identical---a tolerance calibrated in one
+precision, used in another---and scaling it to the dtype fixed the symptom and silently replaced
+the objective. The distinction is whether the number is being \emph{compared} against something or
+\emph{added} to it. Only the first kind can be made scale-free by dividing.
 
 \begin{thebibliography}{9}
 \small
