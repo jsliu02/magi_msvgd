@@ -159,23 +159,35 @@ class GaussNewtonMAP:
                              jnp.zeros((p, nD), self.dtype)], axis=1)], axis=0)
 
     def _normal_equations(self, theta, X, sigmas):
-        '''
-        A = J^T J and g = J^T R, assembled without materialising J.
+        '''A = J^T J, g = J^T R and ||R||^2. See _normal_equations_r, which this wraps.'''
+        A, g, f, _ = self._normal_equations_r(theta, X, sigmas)
+        return A, g, f
 
-        Forced to full precision. JAX defaults to reduced-precision float32 matmuls on hardware
-        with tensor cores, which costs about four significant digits on a J^T J of this size
-        (measured: 1.5e-4 relative against 8.9e-8). Since cond(J^T J) ~ 1e4 here, that
+    def _normal_equations_r(self, theta, X, sigmas):
+        '''
+        A = J^T J, g = J^T R, ||R||^2 and the ODE residual block, without materialising J.
+
+        The three-value _normal_equations is kept as the public form because recorded experiments
+        unpack it; the exact Hessian wants r_ode as well and would otherwise recompute the whole
+        residual to get it.
+
+        Forced to full precision throughout. JAX defaults to reduced-precision float32 matmuls on
+        hardware with tensor cores, which costs about four significant digits on a J^T J of this
+        size (measured: 1.5e-4 relative against 8.9e-8). Since cond(J^T J) ~ 1e4 here, that
         perturbation is amplified straight into the Gauss-Newton step: in float32 the guard makes
         the recovered mode 2.75x closer to the float64 answer for about 2% more time. It is a
         no-op in float64, where matmuls are already computed at full precision.
+
+        The guard covers the assembly of the residual and of Jode as well as the products that
+        follow. Both are built from einsums against the GP factors, which XLA is equally free to
+        run on tensor cores, and reduced precision there corrupts J before J^T J is ever formed.
         '''
         nD, p = self.nD, self.p
-        r = self.residual(theta, X, sigmas)
-        r_gp, r_obs, r_ode, r_pri = r[:nD], r[nD:2 * nD], r[2 * nD:3 * nD], r[3 * nD:]
-        w = self._obs_weight(sigmas)
-        Jode = self._ode_jac(theta, X)
-
         with jax.default_matmul_precision('highest'):
+            r = self.residual(theta, X, sigmas)
+            r_gp, r_obs, r_ode, r_pri = r[:nD], r[nD:2 * nD], r[2 * nD:3 * nD], r[3 * nD:]
+            w = self._obs_weight(sigmas)
+            Jode = self._ode_jac(theta, X)
             A = Jode.T @ Jode
             A = A.at[p:, p:].add(self.JgpTJgp)                           # constant GP block
             diag = jnp.arange(p, p + nD)
@@ -184,7 +196,9 @@ class GaussNewtonMAP:
             g = g.at[p:].add(self.Jgp.T @ r_gp + w * r_obs)
             A = A.at[:p, :p].add(self.theta_prec)                         # theta prior block
             g = g.at[:p].add(self.theta_root.T @ r_pri)
-        return A, g, jnp.sum(r ** 2)
+        # r_ode comes back too: the exact Hessian needs it for the second-derivative term and
+        # would otherwise recompute the whole residual.
+        return A, g, jnp.sum(r ** 2), r_ode
 
     # ------------------------------------------------------------------ the loop, all on device
     def _run(self, theta, X, sigmas, lam, tol, max_iter):
@@ -229,7 +243,7 @@ class GaussNewtonMAP:
 
         def body(c):
             theta, X, sigmas, lam, it, _, stall = c
-            A, g, f0 = self._normal_equations(theta, X, sigmas)
+            A, g, f0, _ = self._normal_equations_r(theta, X, sigmas)
             dg = jnp.diag(A)
             dg = jnp.where(dg > tiny, dg, jnp.ones_like(dg))
             Di = jax.lax.rsqrt(dg)                                       # D = diag(A)^(-1/2)
@@ -281,7 +295,7 @@ class GaussNewtonMAP:
         init = (theta, X, sigmas, lam, jnp.zeros((), jnp.int32),
                 jnp.asarray(jnp.inf, dt), jnp.zeros((), jnp.int32))
         theta, X, sigmas, lam, it, dec, _ = jax.lax.while_loop(cond, body, init)
-        A, g, _ = self._normal_equations(theta, X, sigmas)               # at the answer
+        A, g, _, _ = self._normal_equations_r(theta, X, sigmas)          # at the answer
         dg = jnp.diag(A)
         dg = jnp.where(dg > tiny, dg, jnp.ones_like(dg))
         Di = jax.lax.rsqrt(dg)

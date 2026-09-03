@@ -12,62 +12,56 @@ from _initializer import run_initialization
 from gauss_newton import GaussNewtonMAP
 
 '''
-Dependencies: jax
-Additional helpers dependencies: numpy, scipy, blackjax (only for nuts())
+MAGI posterior inference: an exact mode, a profiled posterior, and a diagnosis of both.
 
-MAGI posterior inference by a deterministic pipeline, with no SVGD anywhere.
+Dependencies: jax. Helpers also use numpy and scipy; nuts() additionally needs blackjax.
 
-The posterior is summarised by a Gaussian whose mean is corrected past the mode and whose
-covariance is the inverse exact Hessian. The mode is not good enough on its own: on
-FitzHugh-Nagumo the Laplace approximation N(x_MAP, H^-1) is mis-centred by a FULL posterior
-standard deviation on two of the three ODE parameters, while its interval widths are within a
-few percent -- an error that does not announce itself in any summary a user reads. Two
-corrections are computed and combined:
+The posterior over (theta, X) is dominated numerically by the states -- 300 to 600 of them
+against 3 to 7 parameters -- and the states are the part the data and the GP prior pin down.
+So they are not approximated. fit() integrates them out by Laplace at each theta,
 
-    third order   mu_3  = x* - 0.5 H^-1 grad tr(H^-1 hess U),  the standard Laplace expansion
-                          of the posterior mean, evaluated with the exact Hessian
-    low-rank VI   mu_VI = the stationary point of E_q[grad log p] = 0, solved by a Newton
-                          iteration preconditioned by E_q[H] restricted to the few directions
-                          along which the potential is measurably non-quadratic
+    p(theta) ~ exp(-U(theta, X*(theta))) det H_XX(theta, X*(theta))^(-1/2),   X* = argmin_X U,
 
-They are O(Lambda)-accurate with different O(Lambda^2) residuals, so their DISAGREEMENT, needing
-no reference chain, measures what is left. When the two derivations disagree by more than half
-the size of the correction they are computing, the expansion has broken down; fit() reports that
-as a warning and the caller should escalate to nuts().
+and does the remaining p-dimensional integral directly, by importance sampling on a scrambled
+Sobol set. Nothing Gaussian is assumed about theta. The result is a mixture -- one Gaussian in X
+per theta node -- so every moment follows in closed form, including Cov(theta, X).
 
-Measured against long NUTS references, as the largest error over the ODE PARAMETERS, in
-posterior sd -- which is what this method exists to estimate:
+Against long NUTS references, the largest parameter error is at or below the level at which two
+halves of the reference agree with each other on every system that has a usable one: 0.0126
+against a floor of 0.0100 on FitzHugh-Nagumo, 0.0093 against 0.0081 on HIV, 0.0119 against 0.0405
+on the chaotic Lorenz. The mode alone is 1.03, 0.15 and 1.80 out. See magi_msvgd.profiled.
 
-    setting             MAP      third order    midpoint    gate
-    baseline (41 obs)   1.033    0.099          0.297       apply
-    half     (21 obs)   1.595    0.153          0.630       apply
-    noisy    (sd 0.5)   2.579    1.366          1.023       apply
-    quarter  (11 obs)   --       --             --          SUPPRESS
+The pipeline
+------------
+    map_solve()   the mode, by Gauss-Newton on the exact least-squares form (gauss_newton.py).
+                  Convergence is measured by the Newton decrement, which is unit-free.
+    diagnose()    is the question well posed? Mode validity, uniqueness, identifiability,
+                  properness, whether the GP constrains the states between observations, and how
+                  far the curvature moves over the posterior. Seconds, no sampling.
+    fit()         the profiled posterior, with an effective-sample-size and Pareto k-hat gate.
+                  Falls back to the Laplace approximation when the gate declines.
+    sample()      draws from whichever was reported.
+    nuts()        the exact fallback, preconditioned by the mode's Hessian.
 
-The third-order mean is the default because it is 3-4x better on theta than the midpoint at the
-two densest settings. Scored instead as an average over all 325 coordinates the ranking reverses
-(0.027 vs 0.023 at baseline) -- but that average is dominated by the 322 trajectory states, and
-giving up 13% there to gain 3x on the parameters is the right trade. Pass estimator='midpoint'
-if the trajectory, not theta, is the target.
+Precision and device
+--------------------
+float32 is the default and is the right choice: it matches float64 on FitzHugh-Nagumo and Lorenz
+and beats it on HIV, in each case by selecting a larger finite-difference step to stay clear of
+its own round-off floor. Hes1 is the exception -- single precision takes its effective sample
+size from 21% to 2%, and the gate catches it. The factorisations that define the residual are
+always computed in float64 regardless (see gauss_newton), because they define the model rather
+than approximate it.
 
-The correction is APPLIED even when the gate warns. It improved the largest theta error at every
-setting measured, by 2x to 10x, including the one where the VI diverges. What degrades there is
-the average over trajectory states (0.204 -> 0.336 on the sparsest setting) -- a fifth of a
-posterior sd spread over 322 coordinates, against 1.3 sd recovered on the three that the method
-exists to estimate. Pass on_gate='suppress' to fall back to the uncorrected mode instead. Cost is
-around a second, against 144 s for a NUTS run that only converges at the baseline density.
-
-Precision. float32 is the default and is free at the first two settings -- it reproduces the
-float64 mean to four decimals -- but the VI solve diverges on `noisy`, where float64 applies the
-correction and gains 1.8x. The gate catches this, so single precision costs the improvement
-rather than producing a wrong answer, but put(dtype=jnp.float64) is worth trying whenever the
-gate fires.
+On a GPU the per-node work is ~200x faster than on CPU but each distinct array shape costs a
+fresh XLA compile, so the profile dispatches are padded to one shape there and left exact on CPU;
+see profiled.ProfiledPosterior._pad_rows. The persistent on-disk compilation cache below makes
+the compile a once-per-machine cost rather than a once-per-process one.
 
 An exact route exists for a useful subclass of problems. If the ODE is affine in the state X at
 fixed theta -- linear compartment models, linear pharmacokinetics, any constant-coefficient
 system, and much weaker than requiring f affine in (X, theta) jointly -- then p(X | theta) is
-EXACTLY Gaussian, the 325-dimensional problem is exactly a p-dimensional one, and no Gaussian
-approximation is needed at all. condition_A() tests for this in two Hessian evaluations.
+EXACTLY Gaussian and the profiling above carries no approximation error at all. condition_A()
+tests for this in two Hessian evaluations.
 '''
 
 # Persistent on-disk compilation cache, CWD-based. The path is recorded rather than recomputed on
@@ -129,6 +123,25 @@ def clear_jax_cache(path=None, force=False, dry_run=False, verbose=True):
     return path, n, b
 
 
+def _solve_upper(U, B):
+    """Solve U y = B for upper-triangular U. scipy when present, LU otherwise."""
+    try:
+        from scipy.linalg import solve_triangular
+        return solve_triangular(U, B, lower=False)
+    except ImportError:
+        return np.linalg.solve(U, B)
+
+
+class _Laplace:
+    """Everything derived from the exact Hessian at the MAP, computed once and shared."""
+    __slots__ = ("x", "H", "d", "w", "V", "keep", "Sig", "sd", "whiten",
+                 "n_neg", "n_null", "cond", "S")
+
+    def __init__(self, **kw):
+        for k in self.__slots__:
+            setattr(self, k, kw.get(k))
+
+
 def _status(ok, warn=False):
     """OK when the check passes; WARN for a soft failure, FAIL for a hard one."""
     if ok:
@@ -181,17 +194,33 @@ class MAGIPosterior:
         pp, p = self.profiled, m.p
         idx = rng.choice(len(pp.w), size=k, p=pp.w)
         out = np.empty((k, d))
-        hess = m._hessian_fn()
-        for j in np.unique(idx):
-            sel = np.where(idx == j)[0]
+        uniq = np.unique(idx)
+        for j in uniq:
+            sel = idx == j
             out[sel, :p] = pp.TH[j]
             out[sel, p:] = pp.Xstar[j].ravel()
-            if state_noise:
-                x = np.concatenate([pp.TH[j], pp.Xstar[j].ravel()])
-                H = np.asarray(hess(jnp.asarray(x, m.mu.dtype)), np.float64)[p:, p:]
-                w, V = np.linalg.eigh(0.5 * (H + H.T))
+        if not state_noise:
+            return m.unpack_particles(jnp.asarray(out)) if unpack else out
+        # One batched Hessian assembly for every distinct node drawn, then a Cholesky each.
+        # Sequential assembly plus an eigh of the nD x nD state block per node was the expensive
+        # part of drawing from the mixture: at nD = 603 an eigh is 30x a Cholesky, and H_XX is
+        # positive definite at a profile solution -- the inner solve already checked, which is
+        # what pp.ok records -- so the eigh is only a fallback for the node where it is not.
+        XP = np.stack([np.concatenate([pp.TH[j], pp.Xstar[j].ravel()]) for j in uniq])
+        Hs = np.asarray(m._hessian_batch()(jnp.asarray(XP, m.mu.dtype)), np.float64)[:, p:, p:]
+        for j, Hj in zip(uniq, Hs):
+            sel = idx == j
+            Hj = 0.5 * (Hj + Hj.T)
+            z = rng.standard_normal((int(sel.sum()), Hj.shape[0]))
+            try:
+                # H = C C^T, so C^-T z has covariance H^-1.
+                C = np.linalg.cholesky(Hj)
+                noise = _solve_upper(C.T, z.T).T
+            except np.linalg.LinAlgError:
+                w, V = np.linalg.eigh(Hj)
                 L = (V / np.sqrt(np.maximum(w, 1e-12 * max(w.max(), 1.0)))) @ V.T
-                out[sel, p:] += rng.standard_normal((len(sel), L.shape[0])) @ L.T
+                noise = z @ L.T
+            out[sel, p:] += noise
         return m.unpack_particles(jnp.asarray(out)) if unpack else out
 
     def report(self):
@@ -410,10 +439,9 @@ class MAGI:
         self._K_invs64 = np.asarray(self.K_invs, np.float64)
 
         self.particles_init = jnp.concatenate([self.theta_init, self.x_init.flatten(), self.sigmas[self.unknown_sigmas]])
-        # tracks whether the user has explicitly chosen a dtype/device via put() -- if not,
-        # the pipeline will default to float32 for speed. Single precision is safe here: the
-        # third-order correction agrees with its float64 value to 7e-4 relative, which is
-        # 0.00007 posterior sd against a correction of 0.17 and a reference floor of 0.006.
+        # Tracks whether the user has explicitly chosen a dtype/device via put(); if not, the
+        # pipeline defaults to float32, which is measured as the better choice on three of the
+        # four test systems and caught by the gate on the fourth.
         self._put_called = False
         self._invalidate()
 
@@ -522,7 +550,10 @@ class MAGI:
         '''Drop everything cached against a particular dtype/device. Called by put().'''
         self._gn = None
         self._hess_jit = None
+        self._hess_batch = None
         self._logp_batch = None
+        self._kernels = {}
+        self._lap = None
         self.posterior = None
 
 
@@ -614,24 +645,76 @@ class MAGI:
 
         def hess(x):
             th, X = x[:p], x[p:p + nD].reshape(n, D)
-            J = gn.jacobian(th, X, self.sigmas)
-            r_ode = gn.residual(th, X, self.sigmas)[2 * nD:3 * nD].reshape(n, D)
-            c = gn.b * jnp.einsum('nd,dmn->md', r_ode, gn.Lk)
+            # J^T J comes from the solver's structured assembly, which never materialises J. The
+            # dense route -- form the (3nD+p) x dim Jacobian, including an nD x nD diagonal block
+            # and an nD x nD GP block, then multiply it out -- computes the same matrix for about
+            # 2.5x the work, and the exact Hessian is evaluated once per profile node.
+            # _normal_equations keeps its own default_matmul_precision("highest") guard, which
+            # matters here: J^T J is a genuine matrix-matrix product, so on tensor-core hardware
+            # it would otherwise run in TF32, and on FitzHugh-Nagumo in float32 that widens the
+            # spread of the error in log det H_XX across nodes from 1.1e-4 to 5.5e-2 nats, landing
+            # straight on the importance weights.
+            A, _g, _f, r_ode = gn._normal_equations_r(th, X, self.sigmas)
+            c = gn.b * jnp.einsum('nd,dmn->md', r_ode.reshape(n, D), gn.Lk)
             Z = jnp.concatenate([X, jnp.broadcast_to(th, (n, p))], axis=1)
             S = jnp.einsum('md,mdij->mij', c, hl(Z, gn.I))
-            base = jnp.zeros((gn.dim, gn.dim), x.dtype)
-            # Full precision for J^T J. This is a genuine matrix-matrix product, so on tensor-core
-            # hardware it defaults to TF32 and roughly ten mantissa bits. Measured on
-            # FitzHugh-Nagumo in float32: the spread of the error in log det H_XX across profile
-            # nodes is 1.1e-4 nats on CPU, where float32 matmuls are already exact to float32, and
-            # 5.5e-2 on GPU without this guard -- a factor of 500, and it lands directly on the
-            # importance weights. J^T J already carries the theta-prior block, which is linear and
-            # so contributes no second-derivative term.
-            with jax.default_matmul_precision("highest"):
-                JtJ = J.T @ J
-            return JtJ + base.at[idx[:, :, None], idx[:, None, :]].add(S)
+            # The theta prior is linear, so it contributes to J^T J and nothing second order.
+            return A.at[idx[:, :, None], idx[:, None, :]].add(S)
         self._hess_jit = jax.jit(hess)
         return self._hess_jit
+
+    def _hessian_batch(self):
+        """vmapped exact Hessian. One dispatch for a set of points instead of one each."""
+        if self._hess_batch is None:
+            self._hess_batch = jax.jit(jax.vmap(self._hessian_fn()))
+        return self._hess_batch
+
+    def _laplace(self):
+        """
+        The exact Hessian at the MAP and everything read off it, computed once and cached.
+
+        fit(), diagnose() and the profiled posterior each want some of the Laplace covariance,
+        the marginal theta scale and dX*/dtheta, and each used to assemble the Hessian and
+        eigendecompose it for itself -- two assemblies and three dim x dim eigendecompositions
+        per fit. Invalidated by map_solve(), since it is tied to a particular mode.
+
+        float64 numpy throughout, deliberately. put(float32) turns jax's x64 off, and an eigh in
+        single precision of a matrix conditioned at 1e9 says nothing about its small eigenvalues
+        -- which are exactly what the null-direction and identifiability checks read.
+        """
+        if self._lap is not None:
+            return self._lap
+        if getattr(self, "map_particle", None) is None:
+            self.map_solve(verbose=False)
+        p = self.p
+        x = np.asarray(self.map_particle, np.float64)
+        H = np.asarray(self.hessian(x), np.float64); H = 0.5 * (H + H.T)
+        # Scale before decomposing: raw Hessian eigenvalues carry units, so "small" would not be
+        # a statement about the posterior. D H D has a unit diagonal and a comparable spectrum.
+        d = np.sqrt(np.maximum(np.abs(np.diag(H)), np.finfo(float).tiny))
+        w, V = np.linalg.eigh(H / np.outer(d, d))
+        sc = max(abs(w).max(), 1e-300)
+        keep = w > 1e-10 * sc
+        Vk = V[:, keep] / d[:, None]
+        Sig = (Vk / w[keep]) @ Vk.T
+        # dX*/dtheta by the implicit function theorem: H_XX dX*/dtheta + H_Xtheta = 0. A solve,
+        # not an eigendecomposition -- H_XX is positive definite at a mode, and eigh of it costs
+        # an order more. The eigh path is kept for the case where it is not.
+        Hxx, Hxt = H[p:, p:], H[p:, :p]
+        try:
+            S = -np.linalg.solve(Hxx, Hxt)
+            if not np.all(np.isfinite(S)):
+                raise np.linalg.LinAlgError
+        except np.linalg.LinAlgError:
+            wx, Vx = np.linalg.eigh(0.5 * (Hxx + Hxx.T))
+            S = -((Vx / np.maximum(wx, 1e-12 * max(wx.max(), 1e-300))) @ (Vx.T @ Hxt))
+        self._lap = _Laplace(
+            x=x, H=H, d=d, w=w, V=V, keep=keep, Sig=Sig, S=S,
+            sd=np.sqrt(np.maximum(np.diag(Sig)[:p], 0)),
+            whiten=((V[:, keep] / np.sqrt(w[keep])) @ V[:, keep].T) / d[:, None],
+            n_neg=int((w < -1e-10 * sc).sum()), n_null=int((~keep).sum()),
+            cond=float(sc / max(abs(w).min(), 1e-300)))
+        return self._lap
 
     def hessian(self, particle=None):
         '''Exact Hessian of -log p at `particle` (default: the MAP). Returns a jax array.'''
@@ -662,6 +745,7 @@ class MAGI:
         gn = self._gn_solver()
         out = gn.solve(x0=x0, **kwargs)
         self.map_particle = gn.map_particle
+        self._lap = None                 # the cached Hessian belongs to the previous mode
         return out
 
     def diagnose(self, n_starts=4, spread=0.25, reach=1e4, drop=3.0, mode_tol=0.05, n_curv=8,
@@ -705,16 +789,9 @@ class MAGI:
                        np.float64)[0]
         gnorm = float(np.linalg.norm(g))
 
-        H = np.asarray(self.hessian(x), np.float64); H = 0.5 * (H + H.T)
-        d = np.sqrt(np.maximum(np.abs(np.diag(H)), np.finfo(float).tiny))
-        w, V = np.linalg.eigh(H / np.outer(d, d))            # scaled: eigenvalues are unitless
-        sc = max(abs(w).max(), 1e-300)
-        n_neg = int((w < -1e-10 * sc).sum())
-        keep = w > 1e-10 * sc
-        n_null = int((~keep).sum())
-        cond = float(sc / max(abs(w).min(), 1e-300))
-        Sig = ((V[:, keep] / w[keep]) @ V[:, keep].T) / np.outer(d, d)
-        sd = np.sqrt(np.maximum(np.diag(Sig)[:p], 0))
+        lap = self._laplace()
+        H, Sig, sd = lap.H, lap.Sig, lap.sd
+        n_neg, n_null, cond = lap.n_neg, lap.n_null, lap.cond
         # Distance from here to the true mode, in posterior standard deviations. The raw gradient
         # norm cannot be thresholded: it carries the units of the log-density and of theta, so
         # what counts as small depends on the problem and on the working precision. This does not
@@ -739,12 +816,12 @@ class MAGI:
         # reproduce the ordering obtained from reference draws.
         cond_M = np.nan
         if n_curv:
-            Lw = ((V[:, keep] / np.sqrt(w[keep])) @ V[:, keep].T) / d[:, None]
+            Lw = lap.whiten
             rr = np.random.default_rng(seed)
+            XI = x[None, :] + rr.standard_normal((n_curv, len(x))) @ Lw.T
+            Hs = np.asarray(self._hessian_batch()(jnp.asarray(XI, self.mu.dtype)), np.float64)
             cs = []
-            for _ in range(n_curv):
-                xi = x + rr.standard_normal(len(x)) @ Lw.T
-                Hi = np.asarray(self.hessian(xi), np.float64)
+            for Hi in Hs:
                 Hi = 0.5 * (Hi + Hi.T)
                 ei = np.linalg.eigvalsh(Lw.T @ Hi @ Lw)
                 cs.append(float(np.abs(ei).max() / max(np.abs(ei).min(), 1e-300)))
@@ -772,29 +849,37 @@ class MAGI:
                         opts.append((v, xn))
                 except Exception:
                     pass
+            # Restore the original mode. The restarts each invalidated the cached Laplace, but
+            # this solve starts at x and returns to it, so the cached decomposition is still the
+            # decomposition at this point and is reinstated rather than recomputed -- a dim x dim
+            # Hessian assembly and eigendecomposition saved.
             self.map_solve(x0=jnp.asarray(x, self.mu.dtype), verbose=False, check=False)
+            self._lap = lap
             best_alt = max(o[0] for o in opts)
             n_distinct = len(opts)
 
         pp = ProfiledPosterior(self, n_nodes=8, seed=seed)
-        base = pp.logp(x[None, :p])[0][0]
         # Several radii, not one. A probe whose inner solve fails also returns -inf, which would
         # be indistinguishable from a density that has genuinely decayed, so the reported fall is
         # taken at the furthest radius that actually resolved, and the radius is reported with it.
         radii = np.array([r for r in (1.0, reach ** 0.5, reach) if r > 0])
-        falls = np.full(p, np.nan)
-        at_r = np.zeros(p)
+        nr = len(radii)
+        falls, at_r = np.full(p, np.nan), np.zeros(p)
+        # Every parameter at every radius in one dispatch. Walking them one at a time cost p
+        # separate launches of a kernel whose per-call overhead dwarfs six extra rows.
+        TH = np.repeat(x[None, :p], 1 + 2 * nr * p, axis=0)     # row 0 is the reference value
         for j in range(p):
             scale = max(abs(x[j]), 1.0)
-            TH = np.repeat(x[None, :p], 2 * len(radii), axis=0)
             for i, r in enumerate(radii):
-                TH[2 * i, j] += r * scale
-                TH[2 * i + 1, j] -= r * scale
-            lp, _, ok = pp.logp(TH)
+                TH[1 + (j * nr + i) * 2, j] += r * scale
+                TH[2 + (j * nr + i) * 2, j] -= r * scale
+        lp, _, ok = pp.logp(TH)
+        base = lp[0]
+        for j in range(p):
             for i, r in enumerate(radii):                       # furthest resolved radius
-                pair, pok = lp[2 * i:2 * i + 2], ok[2 * i:2 * i + 2]
-                if np.all(pok) and np.all(np.isfinite(pair)):
-                    falls[j] = float(np.min(base - pair))
+                sl = slice(1 + (j * nr + i) * 2, 3 + (j * nr + i) * 2)
+                if np.all(ok[sl]) and np.all(np.isfinite(lp[sl])):
+                    falls[j] = float(np.min(base - lp[sl]))
                     at_r[j] = r
             if not np.isfinite(falls[j]):                       # nothing resolved even at r = 1
                 falls[j] = np.inf
@@ -1006,21 +1091,16 @@ class MAGI:
         # Newton's finite-difference stencil. Jacobi-stabilised because forming the inverse of a
         # Hessian whose coordinates span many orders of magnitude is otherwise unreliable.
         t0 = time.time()
-        H = np.asarray(self.hessian(x_map), np.float64); H = 0.5 * (H + H.T)
-        dsc = np.sqrt(np.maximum(np.abs(np.diag(H)), np.finfo(float).tiny))
-        wv, Vv = np.linalg.eigh(H / np.outer(dsc, dsc))
-        keep = wv > 1e-10 * max(abs(wv).max(), 1e-300)
-        Sig = ((Vv[:, keep] / wv[keep]) @ Vv[:, keep].T) / np.outer(dsc, dsc)
+        lap = self._laplace()
+        Sig, n_null = lap.Sig, lap.n_null
         t["hessian"] = time.time() - t0
-        n_null = int((~keep).sum())
 
         pp = ProfiledPosterior(self, n_nodes=n_nodes, seed=seed, inner_iters=inner_iters,
                                inflate=inflate)
         pp.build(verbose=False)
         t.update(pp.t)
         p = self.p
-        lap_sd = np.sqrt(np.maximum(np.diag(Sig)[:p], 0))
-        shift = float(np.max(np.abs(pp.theta_hat - x_map[:p]) / np.maximum(lap_sd, 1e-300)))
+        shift = float(np.max(np.abs(pp.theta_hat - x_map[:p]) / np.maximum(lap.sd, 1e-300)))
         reliable = bool(pp.ess / pp.n_nodes >= ess_min
                         and np.isfinite(pp.khat) and pp.khat < khat_max
                         and getattr(pp, "mode_ok", True))

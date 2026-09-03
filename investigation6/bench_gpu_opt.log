@@ -1,0 +1,4 @@
+# device cuda:0 OPTIMIZED
+ system   dt     fit    map   hess  setup   mode  nodes    ESS  gate    maxsd
+     fn  f32     4.3    1.3    0.7    0.0    2.0    0.3 79.4%    OK   0.2760
+    hiv  f32     4.9    1.4    0.7    0.0    2.5    0.2 35.6%    OK   0.0574

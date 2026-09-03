@@ -47,13 +47,30 @@ class ProfiledPosterior:
         self.fd_used, self.fd_plateau = None, None
         self._inner = None
         self._S = None
+        self._pad = None
         self.t = {}
 
     # ------------------------------------------------------------------ profile evaluation
     def _make_inner(self):
+        """
+        The per-node profile solve, compiled once per (model, dtype, device, settings).
+
+        Cached on the MAGI object, not on self. A fit() builds one ProfiledPosterior and a
+        diagnose() builds another, and each used to trigger a fresh trace and compile of this
+        function -- which is the most expensive kernel in the pipeline, since it holds a scan of
+        Gauss-Newton steps and a structural Hessian at nD x nD. Measured on HIV: rebuilding with
+        the compiled function reused takes 28 s against 69 s without.
+        """
         if self._inner is not None:
             return self._inner
         m = self.m
+        key = ("profile_inner", self.inner_iters, self.damp, self.jitter)
+        cached = getattr(m, "_kernels", None)
+        if cached is None:
+            cached = m._kernels = {}
+        if key in cached:
+            self._inner = cached[key]
+            return self._inner
         gn = m._gn_solver()
         p, n, D, nD = m.p, m.n, m.D, gn.nD
         sig, hess, dt = m.sigmas, m._hessian_fn(), m.mu.dtype
@@ -64,7 +81,7 @@ class ProfiledPosterior:
                 # Jacobi-scaled exactly as the MAP solve is, and for the same reason: this is a
                 # normal-equations Cholesky, so it carries the SQUARE of the Jacobian's condition
                 # number. On HIV that is 4e17 unscaled, and half the inner solves simply fail.
-                A, g, _r = gn._normal_equations(theta, X, sig)
+                A, g, _r, _ = gn._normal_equations_r(theta, X, sig)
                 Axx = A[p:, p:] + self.damp * jnp.trace(A[p:, p:]) / nD * eyeX
                 dg = jnp.diag(Axx)
                 dg = jnp.where(dg > jnp.finfo(dg.dtype).tiny, dg, jnp.ones_like(dg))
@@ -82,32 +99,24 @@ class ProfiledPosterior:
             ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(dd)) & (jnp.min(dd) > 0)
             lw = m.logdensity(x, m.data) - jnp.sum(jnp.log(jnp.abs(dd)))
             return jnp.where(ok, lw, -jnp.inf), X, ok
-        self._inner = jax.jit(jax.vmap(inner, in_axes=(0, 0)))
+        self._inner = cached[key] = jax.jit(jax.vmap(inner, in_axes=(0, 0)))
         return self._inner
 
     def _sensitivity(self):
         """
         dX*/dtheta at the joint mode, by the implicit function theorem.
 
-        X*(theta) is defined by grad_X U(theta, X*) = 0, so differentiating gives
-        H_XX dX*/dtheta + H_Xtheta = 0. Both blocks are already available from the exact Hessian,
-        and the solve reuses one Cholesky for all p right-hand sides, so the whole sensitivity
-        costs about as much as a single inner iteration. Starting each node from
-        X_MAP + (dX*/dtheta)(theta - theta_MAP) instead of from X_MAP alone puts it a full order
-        closer, which is what lets the inner iteration count come down.
+        X*(theta) solves grad_X U(theta, X*) = 0, so H_XX dX*/dtheta + H_Xtheta = 0. Starting each
+        node from X_MAP + (dX*/dtheta)(theta - theta_MAP) rather than from X_MAP reaches the
+        reference floor in two inner iterations where X_MAP alone needs four. Computed once with
+        the rest of the Laplace quantities; see MAGI._laplace.
         """
-        if getattr(self, "_S", None) is not None:
-            return self._S
-        m = self.m
-        p = m.p
-        x0 = np.asarray(m.map_particle, np.float64)
-        H = np.asarray(m.hessian(x0), np.float64); H = 0.5 * (H + H.T)
-        Hxx, Hxt = H[p:, p:], H[p:, :p]
-        w, V = np.linalg.eigh(0.5 * (Hxx + Hxx.T))
-        w = np.maximum(w, 1e-12 * max(w.max(), 1e-300))
-        self._S = -((V / w) @ (V.T @ Hxt))                      # (nD, p)
-        self._th0 = x0[:p].copy()
-        self._X0 = x0[p:].reshape(m.n, m.D).copy()
+        if self._S is None:
+            m = self.m
+            lap = m._laplace()
+            self._S = lap.S                                     # (nD, p)
+            self._th0 = lap.x[:m.p].copy()
+            self._X0 = lap.x[m.p:].reshape(m.n, m.D).copy()
         return self._S
 
     def logp(self, TH, X0=None, predict=True):
@@ -127,12 +136,37 @@ class ProfiledPosterior:
             starts = np.broadcast_to(np.asarray(m.map_particle, np.float64)[m.p:]
                                      .reshape(m.n, m.D), (len(TH), m.n, m.D))
         lw, Xs, oks = [], [], []
+        pad = self._pad_rows()
         for s in range(0, len(TH), self.batch):
-            a, b, c = inner(jnp.asarray(TH[s:s + self.batch], dt),
-                            jnp.asarray(starts[s:s + self.batch], dt))
-            lw.append(np.asarray(a, np.float64)); Xs.append(np.asarray(b, np.float64))
-            oks.append(np.asarray(c))
+            th_c, x_c = TH[s:s + self.batch], starts[s:s + self.batch]
+            k = len(th_c)
+            if pad and k < pad:                     # repeat row 0; the copies are discarded
+                th_c = np.concatenate([th_c, np.repeat(th_c[:1], pad - k, axis=0)])
+                x_c = np.concatenate([x_c, np.repeat(x_c[:1], pad - k, axis=0)])
+            a, b, c = inner(jnp.asarray(th_c, dt), jnp.asarray(x_c, dt))
+            lw.append(np.asarray(a, np.float64)[:k]); Xs.append(np.asarray(b, np.float64)[:k])
+            oks.append(np.asarray(c)[:k])
         return np.concatenate(lw), np.concatenate(Xs), np.concatenate(oks)
+
+    def _pad_rows(self):
+        """
+        Row count to pad every dispatch to, or 0 to dispatch the exact number of rows.
+
+        The two platforms have opposite cost models and the right answer differs. On a GPU a
+        64-row call of `inner` costs 26 ms against 2 ms for a single row, while each distinct
+        row count triggers its own 12 s XLA compile -- so padding everything to one shape trades
+        milliseconds for tens of seconds and is overwhelmingly right. On CPU the run time is
+        strictly linear in rows, 79 ms each, and a compile is about a second, so padding a
+        one-row probe to 64 would cost five seconds to save one. Hence: pad on accelerators,
+        never on CPU.
+        """
+        if self._pad is None:
+            try:
+                plat = next(iter(self.m.mu.devices())).platform
+            except Exception:
+                plat = "cpu"
+            self._pad = self.batch if plat != "cpu" else 0
+        return self._pad
 
     # ------------------------------------------------------------------ stencil selection
     def choose_stencil(self, th, sd0, verbose=False):
@@ -164,20 +198,26 @@ class ProfiledPosterior:
         negligible beside the node budget.
         """
         p = self.m.p
+        th = np.asarray(th, np.float64)
         sd0 = np.maximum(np.asarray(sd0, np.float64), 1e-12)
-        f0 = self.logp(np.asarray(th, np.float64)[None, :])[0][0]
         lad = np.asarray(self.fd_ladder, np.float64)
+        # The whole ladder in one dispatch: the centre, then a plus/minus pair per parameter per
+        # rung. Walking the rungs one at a time was ten launches of the most expensive kernel in
+        # the pipeline for 2p rows each.
+        TH = np.repeat(th[None, :], 1 + 2 * p * len(lad), axis=0)
+        for i, fr in enumerate(lad):
+            for j in range(p):
+                r = 1 + 2 * (i * p + j)
+                TH[r, j] += fr * sd0[j]; TH[r + 1, j] -= fr * sd0[j]
+        lp, _, ok = self.logp(TH)
+        f0 = lp[0]
         curv = np.full((len(lad), p), np.nan)
         for i, fr in enumerate(lad):
-            h = fr * sd0
-            TH = np.repeat(np.asarray(th, np.float64)[None, :], 2 * p, axis=0)
             for j in range(p):
-                TH[2 * j, j] += h[j]; TH[2 * j + 1, j] -= h[j]
-            lp, _, ok = self.logp(TH)
-            for j in range(p):
-                a, b = lp[2 * j], lp[2 * j + 1]
-                if ok[2 * j] and ok[2 * j + 1] and np.isfinite(a) and np.isfinite(b):
-                    curv[i, j] = -(a - 2 * f0 + b) / h[j] ** 2 * sd0[j] ** 2
+                r = 1 + 2 * (i * p + j)
+                if ok[r] and ok[r + 1] and np.isfinite(lp[r]) and np.isfinite(lp[r + 1]):
+                    curv[i, j] = (-(lp[r] - 2 * f0 + lp[r + 1]) / (fr * sd0[j]) ** 2
+                                  * sd0[j] ** 2)
         # A run, not a neighbour. Requiring only that consecutive rungs agree lets the estimate
         # walk: on FitzHugh-Nagumo every consecutive change stays under 5% from h = 0.05 to 3.2
         # while the curvature drifts 1.112 -> 1.176, because small steps accumulate. So the
@@ -265,8 +305,9 @@ class ProfiledPosterior:
         fr = self.fd_rel if self.fd_rel is not None else self.choose_stencil(th, sd0, verbose)
         self.fd_used = fr
         h = fr * sd0
-        f0 = self.logp(th[None, :])[0][0]
-        th_best, f_best, H_best = th.copy(), f0, None
+        # No separate evaluation at the centre: it is row 0 of the stencil below, and the best
+        # point seen is tracked from there.
+        f0, th_best, f_best, H_best = -np.inf, th.copy(), -np.inf, None
         for it in range(max_steps):
             pts, idx = [th], {}
             for i in range(p):                                  # gradient + diagonal
@@ -282,6 +323,10 @@ class ProfiledPosterior:
                             pts.append(th + e)
             vals = self.logp(np.array(pts))[0]
             f = vals[0]
+            if np.isfinite(f) and f > f_best:                   # the centre is itself a candidate
+                th_best, f_best = th.copy(), f
+            if not np.isfinite(f0):
+                f0 = f
             g = np.array([(vals[idx[(i, i, +1)]] - vals[idx[(i, i, -1)]]) / (2 * h[i])
                           for i in range(p)])
             Hp = np.zeros((p, p))
@@ -300,10 +345,14 @@ class ProfiledPosterior:
             w, V = np.linalg.eigh(Hn)
             w = np.where(w > 0, w, np.maximum(np.abs(w), 1e-8 * max(abs(w).max(), 1e-300)))
             step = (V / w) @ V.T @ g
+            # All the backtracking candidates at once. Each is one row of the same kernel, so
+            # evaluating five and taking the first acceptable costs far less than up to five
+            # sequential single-row launches.
+            alphas = np.array([1.0, 0.5, 0.2, 0.05, 0.01])
+            cands = th[None, :] + alphas[:, None] * step[None, :]
+            fcs = self.logp(cands)[0]
             done = False
-            for a in (1.0, 0.5, 0.2, 0.05, 0.01):
-                cand = th + a * step
-                fc = self.logp(cand[None, :])[0][0]
+            for a, cand, fc in zip(alphas, cands, fcs):
                 if np.isfinite(fc) and fc > f + 1e-10:
                     th, f0, done = cand, fc, True
                     if fc > f_best:

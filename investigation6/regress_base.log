@@ -1,0 +1,9 @@
+     fn f32 fit   18.2s diag    9.3s  ESS  388.9 khat  -0.44 mode_dist 2.86e-03 fd 0.8
+     fn f64 fit   32.4s diag    9.3s  ESS  387.7 khat  -0.56 mode_dist 1.11e-03 fd 0.1
+   hes1 f32 fit    9.8s diag    4.3s  ESS   10.8 khat   0.48 mode_dist 1.35e-03 fd 0.1
+   hes1 f64 fit    9.5s diag    4.0s  ESS  108.2 khat  -0.06 mode_dist 1.71e-04 fd 0.05
+    hiv f32 fit  118.6s diag   36.0s  ESS  367.6 khat   0.20 mode_dist 7.91e-04 fd 1.6
+    hiv f64 fit  243.7s diag    5.0s  ESS  324.4 khat  -0.37 mode_dist 6.66e-06 fd 0.2
+ lorenz f32 fit    8.2s diag    1.0s  ESS  347.6 khat   0.28 mode_dist 3.48e-03 fd 0.4
+ lorenz f64 fit    6.5s diag    1.2s  ESS  345.8 khat   0.26 mode_dist 6.03e-04 fd 0.1
+wrote regress_base.json

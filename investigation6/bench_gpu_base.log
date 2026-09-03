@@ -1,0 +1,4 @@
+# device cuda:0 BASELINE warm-cache
+ system   dt     fit    map   hess  setup   mode  nodes    ESS  gate    maxsd
+     fn  f32    51.2   18.2    4.0    2.0   18.7    8.3 83.0%    OK   0.2770
+     fn  f64    32.3   10.8    3.1    1.1   12.9    4.3 75.7%    OK   0.2765
