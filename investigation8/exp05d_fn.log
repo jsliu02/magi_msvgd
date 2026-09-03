@@ -1,0 +1,17 @@
+fn: d=325 K=400 precond by H^-1, h=10*h* (1084.9), floors energy 0.0820 stiffvar 1.010
+                              cell       1000      5000     10000     20000
+          real posterior + Prodigy  energy/floor    286.64    666.46    760.52    785.49   (50s)
+                                    whsd^2           4.542     0.974     0.734     2.303
+                                    stiffvar        8.8067    1.4538    0.7113    1.1912
+         real posterior + SGD 1e-3  energy/floor      1.69      1.59      1.52      1.43   (49s)
+                                    whsd^2           1.009     1.012     1.020     1.038
+                                    stiffvar        1.0604    1.0686    1.0789    1.0997
+         real posterior + SGD 1e-5  energy/floor      1.66      1.68      1.70      1.71   (49s)
+                                    whsd^2           1.008     1.008     1.008     1.008
+                                    stiffvar        1.0584    1.0584    1.0585    1.0587
+          exact Gaussian + Prodigy  energy/floor     96.97     97.00     96.82     96.80   (40s)
+                                    whsd^2           8.075     8.314     8.314     8.335
+                                    stiffvar       17.8491   18.0122   17.9500   17.9390
+         exact Gaussian + SGD 1e-3  energy/floor      1.62      1.56      1.52      1.47   (39s)
+                                    whsd^2           1.009     1.017     1.027     1.044
+                                    stiffvar        1.0604    1.0686    1.0789    1.0996

@@ -61,10 +61,15 @@ weaker than joint affineness --- then $p(X \mid \theta)$ is exactly Gaussian, th
 problem is exactly a $3$-dimensional one, and no approximation is required. The condition is
 testable in two Hessian evaluations.
 
-We report several negative results, including that on this problem Stein variational gradient
-descent does not merely converge slowly: started \emph{at} a correct answer it moves away from it,
-degrading energy distance by a factor of $45$--$80$ while holding marginal standard deviations at
-$0.99$ of the reference.
+We report several negative results, including that Stein variational gradient descent does not
+merely converge slowly here: started \emph{at} a correct answer it moves away from it, degrading
+energy distance by a factor of $45$--$80$ while holding marginal standard deviations at $0.99$ of
+the reference. Follow-up work reproduces that to three significant figures and locates the cause,
+which is not specific to this posterior: the collapse is dimensional, and the bandwidth rule the
+method ships with makes it a factor of $0.582K/\ln K$ worse than the rule it is usually credited
+with. A corrected configuration exists and brings the ensemble to the reference's own agreement
+floor---but it degrades the parameter estimates on two of three systems, which is what the exercise
+is for, so we report it as a diagnosis rather than a recommendation.
 \end{abstract}
 
 \section{Introduction}
@@ -703,6 +708,34 @@ $0.991$ of the reference --- visually perfect credible intervals --- while being
 Since the starting point was correct, the motion is unambiguously away from it, and no
 initialisation strategy can help.
 
+We have since reproduced that to three significant figures across a change of integrator and a
+change of GP hyperparameter fit, and the explanation we gave for it was wrong. It is not a property
+of the MAGI posterior: SVGD started at exact draws from a plain $\mathcal N(0, I_{325})$ collapses
+identically. The equilibrium variance obeys $\mathrm{Var}_{\mathrm{SVGD}}/\mathrm{Var} = \ln K/d$,
+because the median heuristic measures the bandwidth \emph{from the ensemble}, so contraction
+tightens the bandwidth, which permits more contraction. Ba et al.\ \cite{ba2022} prove the
+$\Theta(1/d)$ scaling for the plain median heuristic, with constant $(e-1)^{-1}K/d$; the extra
+$1/\ln K$ that Liu and Wang recommend, and that our implementation used, costs a further
+$0.582K/\ln K$ --- a factor of $39$ at $K = 400$. Deleting it is one line, and improves the energy
+distance on these posteriors by $1.8$--$2.4\times$.
+
+\emph{A configuration that works, and does not solve the problem we have.} Running SVGD in
+coordinates whitened by $H^{-1}$ at the mode, at a \emph{fixed} bandwidth and a small fixed step,
+has a genuine attractor---reached from starts a factor of four too narrow and a factor of four too
+wide---and turns the shape error into a pure scale error. A scale error is one number, and the
+Stein ratio measures it without a reference, so rescaling the ensemble by $1/\sqrt{R}$ completes
+the correction: energy distance $0.57$ to $0.96$ times the $K$-particle floor on the three systems
+with usable references, against $1.03$ to $1.65$ for the Gaussian draws it started from. On HIV it
+beats $400$ exact draws on a Kolmogorov--Smirnov comparison.
+
+It is still not a recommendation, and the reason is worth stating. The largest \emph{parameter}
+error goes from $0.077$ to $0.242$ on FitzHugh--Nagumo and $0.071$ to $0.401$ on Lorenz, and the
+rescaling does not repair it, because it corrects a scale and this is a location error. Only HIV
+improves ($0.096 \to 0.067$). The ensemble metric improves because it is dominated by the $322$
+trajectory states; the three numbers the exercise exists to estimate get worse. That is the same
+trade this paper declines in Section~\ref{sec:estimator}, and it is declined here for the same
+reason.
+
 \emph{The Tierney--Kadane profile machinery is not worth it at the baseline density} --- correct,
 $13$\,s, no gain on the joint covariance --- but this does not extend to harder settings, where it
 is the only thing we found that repairs a badly wrong parameter interval
@@ -764,6 +797,9 @@ that about a second of arithmetic fixes it and reports how far it can be trusted
   \emph{Bayesian and Likelihood Methods in Statistics and Econometrics}, 1990.
 \bibitem{hoffman2014} M.~D.~Hoffman, A.~Gelman.
   The No-U-Turn sampler. \emph{JMLR} 15:1593--1623, 2014.
+\bibitem{ba2022} J.~Ba, M.~A.~Erdogdu, M.~Ghassemi, S.~Sun, T.~Suzuki, D.~Wu, T.~Zhang.
+  Understanding the variance collapse of SVGD in high dimensions.
+  \emph{ICLR}, 2022.
 \bibitem{huang2023} C.~Huang, H.~Dong, W.~Fang.
   Detecting and mitigating mode-collapse for flow-based sampling / density-reweighted Stein kernels, 2023.
 \bibitem{opper2009} M.~Opper, C.~Archambeau.

@@ -1,0 +1,19 @@
+
+===== fn  p=3  nD=322  maxit=400  fit() 2.3s =====
+    K                    variant   thEnergy  x floor    thErr   sdrat      sec  vs fit()
+   16               fit() sample    0.20878     1.77   0.3920   1.009      2.3          
+   16        START Laplace theta    0.81362     6.91   1.2262   0.775      0.0          
+   16    profiled SVGD, standard    0.04169     0.35   0.0198   0.861     13.3      5.8x
+   16  profiled SVGD, reweighted    0.06484     0.55   0.0221   1.064     15.5      6.8x
+   16       FLOOR: K exact draws    0.11769     1.00   0.0100   1.000
+   64               fit() sample    0.07579     2.52   0.2389   1.091      2.3          
+   64        START Laplace theta    0.64403    21.37   1.1897   0.907      0.0          
+   64    profiled SVGD, standard    0.00894     0.30   0.0119   0.931     26.9     11.8x
+   64  profiled SVGD, reweighted    0.01473     0.49   0.0110   1.010     31.7     14.0x
+   64       FLOOR: K exact draws    0.03013     1.00   0.0100   1.000
+  256               fit() sample    0.01358     1.61   0.1077   1.025      2.3          
+  256        START Laplace theta    0.48928    57.81   1.0060   1.019      0.0          
+  256    profiled SVGD, standard    0.00274     0.32   0.0100   0.971     80.4     35.4x
+  256  profiled SVGD, reweighted    0.00783     0.93   0.0122   1.001    102.0     44.8x
+  256       FLOOR: K exact draws    0.00846     1.00   0.0100   1.000
+   (ProfiledTarget construction 0.0s; the first SVGD call in each row includes its own JIT compile)

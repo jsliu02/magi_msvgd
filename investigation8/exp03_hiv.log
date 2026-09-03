@@ -1,0 +1,61 @@
+
+===== hiv  p=5  nD=603  maxit=400  fit() 11.0s =====
+    K                    variant   thEnergy  x floor    thErr   sdrat      sec  vs fit()
+   16               fit() sample    0.11927     0.50   0.1194   0.961     11.0          
+   16        START Laplace theta    0.17764     0.74   0.4350   0.847      0.0          
+   16    profiled SVGD, standard    0.25293     1.05   0.1027   0.578     30.8      2.8x
+   16  profiled SVGD, reweighted   10.09244    42.01   1.3884   2.326     37.7      3.4x
+   16       FLOOR: K exact draws    0.24025     1.00   0.0081   1.000
+   64               fit() sample    0.05137     1.25   0.1233   0.931     11.0          
+   64        START Laplace theta    0.07550     1.84   0.3099   0.943      0.0          
+   64    profiled SVGD, standard    0.05290     1.29   0.2807   0.881     96.9      8.8x
+   64  profiled SVGD, reweighted    7.16637   174.96   0.8630   2.032    119.4     10.8x
+   64       FLOOR: K exact draws    0.04096     1.00   0.0081   1.000
+  256               fit() sample    0.01451     0.76   0.1026   0.986     11.0          
+  256        START Laplace theta    0.01650     0.86   0.1146   0.959      0.0          
+W0902 22:31:10.138408  343126 bfc_allocator.cc:502] Allocator (GPU_0_bfc) ran out of memory trying to allocate 16.74GiB (rounded to 17978466560)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0902 22:31:10.158471  343126 bfc_allocator.cc:513] ___________________________________________________________________________________________________*
+Traceback (most recent call last):
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation8/exp03_profiled.py", line 121, in <module>
+    TH, Rs, _ = M7.run_svgd(g, TH0, MAXIT, kernel=kern,
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation8/msvgd8.py", line 132, in run_svgd
+    return np.asarray(fwd(Y), np.float64), np.asarray(R, np.float64), hist
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/array.py", line 414, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/array.py", line 614, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 16.74GiB.
+W0902 22:31:25.782887  343126 bfc_allocator.cc:502] Allocator (GPU_0_bfc) ran out of memory trying to allocate 16.79GiB (rounded to 18023340800)requested by op 
+If the cause is memory fragmentation maybe the environment variable 'TF_GPU_ALLOCATOR=cuda_malloc_async' will improve the situation. 
+Current allocation summary follows.
+Current allocation summary follows.
+W0902 22:31:25.783022  343126 bfc_allocator.cc:513] ___________________________________________________________________________________________________*
+Traceback (most recent call last):
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation8/exp03_profiled.py", line 121, in <module>
+    TH, Rs, _ = M7.run_svgd(g, TH0, MAXIT, kernel=kern,
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/storage-1/github-repos/magi_msvgd/investigation8/msvgd8.py", line 132, in run_svgd
+    return np.asarray(fwd(Y), np.float64), np.asarray(R, np.float64), hist
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/array.py", line 414, in __array__
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
+                      ^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/profiler.py", line 384, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jamie/miniforge3/envs/jax-cuda12/lib/python3.12/site-packages/jax/_src/array.py", line 614, in _value
+    npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 16.79GiB.
+  256       FLOOR: K exact draws    0.01919     1.00   0.0081   1.000
+   (ProfiledTarget construction 0.1s; the first SVGD call in each row includes its own JIT compile)

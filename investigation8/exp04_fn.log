@@ -1,0 +1,8 @@
+
+===== fn d=325 K=400 it=2000 | floors: energy 0.0820 stiffvar 1.010 KS 0.0482 =====
+   start         bandwidth rule   SteinR    energy   x flr  stiffvar  KS/flr    thErr    h final    sec
+   fit() h = Med / ln K (shipped)   0.0193    6.8362   83.32    0.0005    6.19   1.0197      0.258    2.2
+   fit()    h = Med (Ba et al.)   0.1778    2.8131   34.29    0.0035    3.41   0.6623      2.359    2.0
+    cold h = Med / ln K (shipped)   0.0203    7.6460   93.19    0.0012    6.12   1.0079     0.2586    1.4
+    cold    h = Med (Ba et al.)   0.1686    3.9091   47.65    0.0023    3.41   0.6123      2.276    1.4
+           FLOOR: K exact draws   1.0000    0.0820    1.00    1.0099    1.00   0.0100

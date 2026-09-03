@@ -1,0 +1,14 @@
+
+===== fn d=325 K=400 precond h=10h* lr=0.01 it=100000 | floors energy 0.0820 stiffvar 1.010 KS 0.0482 =====
+                          ensemble   SteinR    energy   x flr  stiffvar   whsd^2  KS/flr    thErr
+                start: fit() draws   1.2738    0.1357    1.65    1.0583    1.007    1.22   0.0768
+               precond SVGD (121s)   0.7023    0.1984    2.42    0.7482    0.719    1.87   0.2422
+       rescaled by 1/sqrt(R=0.702)   1.0742    0.0554    0.68    1.0654    1.024    1.89   0.2422
+              FLOOR: K exact draws   1.0000    0.0820    1.00    1.0099    1.000    1.00   0.0100
+
+===== lorenz d=306 K=400 precond h=10h* lr=0.01 it=100000 | floors energy 0.0783 stiffvar 1.014 KS 0.0483 =====
+                          ensemble   SteinR    energy   x flr  stiffvar   whsd^2  KS/flr    thErr
+                start: fit() draws   1.0194    0.0974    1.24    1.0374    1.007    1.16   0.0710
+                precond SVGD (99s)   0.6530    0.2290    2.92    0.6960    0.694    1.64   0.4013
+       rescaled by 1/sqrt(R=0.653)   1.0737    0.0752    0.96    1.0659    1.063    2.10   0.4013
+              FLOOR: K exact draws   1.0000    0.0783    1.00    1.0140    1.000    1.00   0.0405

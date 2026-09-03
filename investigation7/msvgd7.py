@@ -93,8 +93,14 @@ def run_svgd(m, X0, iters, kernel="standard", optimizer=optax.contrib.prodigy,
         x0j = jnp.asarray(x0, dt); Lj = jnp.asarray(L, dt)
         Linv = jnp.asarray(np.linalg.inv(np.asarray(L, np.float64)), dt)
         logp_v = jax.vmap(lambda y: m.logdensity(x0j + Lj @ y, data))
+        # BUG FIX (investigation 8). This used to read
+        #     Lj.T @ jax.grad(lambda z: m.logdensity(x0j + Lj @ z, d))(y)
+        # which applies the metric TWICE: jax.grad already differentiates through the `Lj @ z`
+        # inside, so it returns L^T grad_x log p on its own, and the explicit Lj.T made it
+        # L^T L^T grad_x log p. Every `precond` row in investigation 7 sec. 3 and in
+        # investigation 8 exp05/exp05d/exp05e before this fix was computed with it and is invalid.
         grad_v = jax.jit(jax.vmap(
-            lambda y, d: Lj.T @ jax.grad(lambda z: m.logdensity(x0j + Lj @ z, d))(y),
+            lambda y, d: jax.grad(lambda z: m.logdensity(x0j + Lj @ z, d))(y),
             in_axes=(0, None)))
         Y0 = ((jnp.asarray(X0, dt) - x0j) @ Linv.T)
         fwd = lambda Y: x0j + Y @ Lj.T

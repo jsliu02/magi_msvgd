@@ -56,7 +56,11 @@ class ProfiledTarget:
                     jax.scipy.linalg.cho_factor(As), -(g[p:] * Di))
                 return X + dX.reshape(n, D), None
 
-            X, _ = jax.lax.scan(body, Xs, None, length=inner_iters)
+            # Rematerialise the inner Newton steps. Reverse mode otherwise stores every
+            # intermediate of `inner_iters` Cholesky factorisations of the (nD x nD) state block
+            # for every particle at once, which on HIV (nD = 603) at K = 256 asks for 16.7 GiB
+            # and OOMs a 32 GB V100. Recomputing them costs one extra forward pass.
+            X, _ = jax.lax.scan(jax.checkpoint(body), Xs, None, length=inner_iters)
             x = jnp.concatenate([theta, X.ravel()])
             Hxx = hess(x)[p:, p:]
             Hxx = 0.5 * (Hxx + Hxx.T) + jitter * jnp.trace(Hxx) / nD * eyeX
@@ -66,8 +70,23 @@ class ProfiledTarget:
         self.logdensity = logphat
         self.mu = m.mu
         self.data = m.data
-        self.gradient = jax.jit(jax.vmap(
-            lambda th, d: jax.grad(lambda z: logphat(z, d))(th), in_axes=(0, None)))
+        # Chunk the particle axis as well, for the same reason: peak memory is set by the
+        # widest vmap, not by the total work.
+        chunk = int(os.environ.get("GCHUNK", 32))
+        _g1 = jax.jit(jax.vmap(lambda th, d: jax.grad(lambda z: logphat(z, d))(th),
+                               in_axes=(0, None)))
+
+        def grad_chunked(TH, d):
+            n = TH.shape[0]
+            if n <= chunk or n % chunk:
+                return _g1(TH, d)
+            # lax.map compiles to a sequential scan, so peak memory is one chunk's worth rather
+            # than all K at once. A Python loop would not do this -- XLA keeps every unrolled
+            # branch live.
+            B = TH.reshape(n // chunk, chunk, TH.shape[-1])
+            return jax.lax.map(lambda b: _g1(b, d), B).reshape(n, TH.shape[-1])
+
+        self.gradient = grad_chunked
 
 
 for name in SYS:

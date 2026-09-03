@@ -1,0 +1,33 @@
+
+===== fn d=325 K=400 PRECOND + fixed h + fixed step | h*=108.5 | floors energy 0.0820 stiffvar 1.010 KS 0.0482 =====
+   start energies: correct 1.65x  narrow 66.21x  wide 261.21x   checkpoints [5000, 25000, 50000, 100000]
+  h=   30h* 0.01       correct e/floor      0.70     1.15     1.60     1.86  (53s)
+                                       stiffvar    1.014    0.904    0.841    0.805
+                                       whsd^2      0.960    0.856    0.798    0.769
+                                       Stein R     0.974    0.852    0.790    0.755
+                                       KS/floor     0.97     1.22     1.43     1.60
+  h=   30h* 0.01      narrow4x e/floor     65.42    59.80    52.72    39.06  (53s)
+                                       stiffvar    0.070    0.086    0.111    0.175
+                                       whsd^2      0.066    0.082    0.105    0.166
+                                       Stein R     0.068    0.083    0.107    0.168
+                                       KS/floor    10.00     9.53     8.90     7.60
+  h=   30h* 0.01        wide4x e/floor    207.11    76.35    26.51     6.60  (53s)
+                                       stiffvar   12.825    4.816    2.431    1.383
+                                       whsd^2     12.180    4.734    2.401    1.377
+                                       Stein R    11.632    4.425    2.286    1.317
+                                       KS/floor    10.20    10.86     8.81     5.89
+  h=  100h* 0.01       correct e/floor      0.64     0.76     0.93     1.24  (54s)
+                                       stiffvar    1.043    0.992    0.946    0.888
+                                       whsd^2      0.987    0.939    0.896    0.842
+                                       Stein R     1.027    0.946    0.895    0.836
+                                       KS/floor     0.98     1.01     1.11     1.28
+  h=  100h* 0.01      narrow4x e/floor     66.39    64.71    62.58    58.29  (53s)
+                                       stiffvar    0.067    0.072    0.078    0.091
+                                       whsd^2      0.064    0.068    0.074    0.086
+                                       Stein R     0.065    0.070    0.075    0.088
+                                       KS/floor    10.08     9.94     9.76     9.40
+  h=  100h* 0.01        wide4x e/floor       nan      nan      nan      nan  (53s)
+                                       stiffvar      nan      nan      nan      nan
+                                       whsd^2        nan      nan      nan      nan
+                                       Stein R       nan      nan      nan      nan
+                                       KS/floor    20.75    20.75    20.75    20.75

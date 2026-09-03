@@ -1,0 +1,7 @@
+
+===== hiv d=608 K=400 precond h=10h* lr=0.01 it=100000 | floors energy 0.1078 stiffvar 0.998 KS 0.0469 =====
+                          ensemble   SteinR    energy   x flr  stiffvar   whsd^2  KS/flr    thErr
+                start: fit() draws   1.0000    0.1111    1.03    1.0738    1.017    1.01   0.0959
+              precond SVGD (1018s)   0.5383    0.7307    6.78    0.5731    0.548    2.00   0.0667
+       rescaled by 1/sqrt(R=0.538)   1.0000    0.0615    0.57    1.0646    1.017    0.80   0.0667
+              FLOOR: K exact draws   1.0000    0.1078    1.00    0.9977    1.000    1.00   0.0081

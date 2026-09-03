@@ -1,0 +1,9 @@
+
+===== hiv  p=5  nD=603  maxit=400  fit() 4.1s =====
+    K                    variant   thEnergy  x floor    thErr   sdrat      sec  vs fit()
+  256               fit() sample    0.01451     0.76   0.1026   0.986      4.1          
+  256        START Laplace theta    0.01650     0.86   0.1146   0.959      0.0          
+  256    profiled SVGD, standard    0.01401     0.73   0.0627   0.958    465.8    113.1x
+  256  profiled SVGD, reweighted   11.67478   608.36  11.8219  34.350    564.9    137.2x
+  256       FLOOR: K exact draws    0.01919     1.00   0.0081   1.000
+   (ProfiledTarget construction 0.0s; the first SVGD call in each row includes its own JIT compile)

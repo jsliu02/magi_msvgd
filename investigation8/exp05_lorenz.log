@@ -1,0 +1,27 @@
+
+===== lorenz d=306 K=400 preconditioned by H^-1 at the MAP | h* = 2d/lnK = 102.1 | floors energy 0.0783 stiffvar 1.014 =====
+   checkpoints [2000, 10000, 50000, 100000]
+  h=   10*h*    correct  stiffvar   3.079   4.402   5.458   4.766   (55s)
+                              e/floor    10.96   34.04  108.64  128.44
+                              Stein R    1.745   1.624   0.762   0.549
+                              KS/floor    4.16    6.87    9.81   10.08
+  h=   10*h*   narrow4x  stiffvar   1.645   3.226   5.898   4.785   (54s)
+                              e/floor     2.08   13.28   82.86  126.44
+                              Stein R    0.918   1.705   1.249   0.764
+                              KS/floor    4.56    8.55   10.13   10.67
+  h=   30*h*    correct  stiffvar   1.973   3.395   7.064   8.987   (54s)
+                              e/floor     3.73   14.59   87.82  154.49
+                              Stein R    1.430   1.976   2.578   2.291
+                              KS/floor    2.18    3.59    8.81   10.06
+  h=   30*h*   narrow4x  stiffvar   0.971   2.638   4.783   7.461   (54s)
+                              e/floor     7.53    8.76   69.89  164.82
+                              Stein R    0.582   2.205   2.546   2.562
+                              KS/floor    4.64    7.76   10.93   11.47
+  h=  100*h*    correct  stiffvar   1.397   2.443   5.572   8.181   (54s)
+                              e/floor     1.48    7.33   41.92   77.91
+                              Stein R    1.190   1.684   2.760   3.268
+                              KS/floor    1.84    2.76    5.90    7.63
+  h=  100*h*   narrow4x  stiffvar   0.600   2.300   4.172   5.301   (54s)
+                              e/floor    17.61    2.86   29.81   68.14
+                              Stein R    0.394   1.331   2.409   2.976
+                              KS/floor    5.50    8.15   10.03   10.47

@@ -1,0 +1,18 @@
+
+===== hiv d=608 K=400 PRECOND + fixed h + fixed step | h*=203.0 | floors energy 0.1078 stiffvar 0.998 KS 0.0469 =====
+   start energies: correct 1.03x  narrow 67.76x  wide 274.14x   checkpoints [5000, 25000, 50000, 100000]
+  h=   30h* 0.01       correct e/floor      0.63     1.09     1.96     3.48  (476s)
+                                       stiffvar    1.028    0.897    0.801    0.703
+                                       whsd^2      0.975    0.853    0.763    0.671
+                                       Stein R     0.958    0.838    0.749    0.659
+                                       KS/floor     0.84     1.01     1.23     1.53
+  h=   30h* 0.01      narrow4x e/floor     66.48    63.56    59.91    52.68  (784s)
+                                       stiffvar    0.069    0.077    0.087    0.112
+                                       whsd^2      0.065    0.073    0.083    0.106
+                                       Stein R     0.064    0.072    0.082    0.105
+                                       KS/floor     6.47     6.28     6.06     5.60
+  h=   30h* 0.01        wide4x e/floor    215.99    77.23    24.32     3.19  (718s)
+                                       stiffvar   13.246    5.386    2.764    1.477
+                                       whsd^2     12.565    5.128    2.640    1.411
+                                       Stein R    12.337    5.035    2.590    1.386
+                                       KS/floor     6.15     4.34     2.81     1.32

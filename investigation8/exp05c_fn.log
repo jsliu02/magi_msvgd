@@ -1,0 +1,14 @@
+fn: d=325 K=400  cond(Sigma_ref)=7.935e+03  checkpoints [2000, 20000, 100000, 200000]
+                target   h/h*     start   mean variance ratio over the checkpoints
+               N(0, I)      3   correct     0.5844   0.5845   0.5846   0.5845   (230s)
+               N(0, I)      3  narrow4x     0.5844   0.5845   0.5845   0.5845   (229s)
+               N(0, I)     10   correct     0.8106   0.8151   0.8151   0.8151   (236s)
+               N(0, I)     10  narrow4x     0.8106   0.8151   0.8151   0.8151   (229s)
+               N(0, I)     30   correct     0.9256   0.9263   0.9286   0.9286   (234s)
+               N(0, I)     30  narrow4x     0.9256   0.9263   0.9286   0.9286   (231s)
+       N(0, Sigma_ref)      3   correct     0.0933   0.0887   0.0868   0.0864   (232s)
+       N(0, Sigma_ref)      3  narrow4x     0.1042   0.1110   0.0950   0.0907   (231s)
+       N(0, Sigma_ref)     10   correct     0.3481   0.3416   0.3319   0.3300   (230s)
+       N(0, Sigma_ref)     10  narrow4x     0.1450   0.3016   0.3975   0.3746   (229s)
+       N(0, Sigma_ref)     30   correct     0.5894   0.5749   0.5685   0.5657   (234s)
+       N(0, Sigma_ref)     30  narrow4x     0.1300   0.2692   0.4758   0.5269   (229s)
