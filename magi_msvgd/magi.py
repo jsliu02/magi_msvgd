@@ -1226,14 +1226,21 @@ class MAGI:
         P = xm[None, None, :] + Y @ L.T if preconditioned else Y
         P = np.asarray(P, np.float64)
 
+        # Split-Rhat: each chain is halved, so the diagnostic sees within-chain drift as
+        # between-chain disagreement. An odd draw count has no two equal halves -- drop the
+        # last draw for the diagnostic only, keeping every draw in what is returned.
         c, ns = P.shape[0], P.shape[1]
-        S = P.reshape(2 * c, ns // 2, -1)
-        W = S.var(1, ddof=1).mean(0)
-        B = S.mean(1).var(0, ddof=1)
-        Vh = (ns // 2 - 1) / (ns // 2) * W + B
-        self.nuts_rhat = np.sqrt(np.maximum(Vh / np.maximum(W, 1e-300), 0))
-        self.nuts_ess = np.minimum(2 * c * (ns // 2) * Vh / np.maximum(B, 1e-300),
-                                   2 * c * (ns // 2))
+        h = ns // 2
+        if h < 2:
+            self.nuts_rhat = np.full(P.shape[-1], np.nan)
+            self.nuts_ess = np.zeros(P.shape[-1])
+        else:
+            S = P[:, :2 * h].reshape(2 * c, h, -1)
+            W = S.var(1, ddof=1).mean(0)
+            B = S.mean(1).var(0, ddof=1)
+            Vh = (h - 1) / h * W + B
+            self.nuts_rhat = np.sqrt(np.maximum(Vh / np.maximum(W, 1e-300), 0))
+            self.nuts_ess = np.minimum(2 * c * h * Vh / np.maximum(B, 1e-300), 2 * c * h)
         self.nuts_divergences = int(jnp.sum(ndiv))
         if verbose:
             print(f'NUTS: {c} chains x {ns} draws | max Rhat = {self.nuts_rhat.max():.4f} | '
