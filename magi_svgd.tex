@@ -403,15 +403,37 @@ The sd ratios say why: the $\theta$ ensemble is itself underdispersed, which is 
 reappearing with $d$ replaced by $p$. It predicts $0.55$ at $(K=16, p=5)$ and $0.83$ at
 $(K=64, p=5)$ against measured $0.33$ and $0.78$; at $p = 3$ it predicts $0.92$ at $K = 16$ and
 above $1$ at $K = 64$, and FitzHugh--Nagumo and Lorenz duly succeed at every $K$. The law therefore
-doubles as a design rule, and this is the third thing worth keeping:
+doubles as a design rule, and this is the third thing worth keeping. It is a rule about the
+bandwidth as much as about the dimension, so it has two forms:
 
-\begin{equation}
-  \text{profiled SVGD needs } \ln K \gtrsim p, \text{ i.e. } K \gtrsim e^{p},
-\end{equation}
+\begin{center}\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+$p$ & 2 & 3 & 4 & 5 & 6 & 7 & 8\\
+\midrule
+$K$ for $90\%$ of the correct variance, $h = \mathrm{Med}/\ln K$ & 96 & 192 & 512 & 2048 & 4096 & --- & ---\\
+$K$ for $90\%$ of the correct variance, $h = \mathrm{Med}$ & \textbf{16} & \textbf{24} & \textbf{32} & \textbf{48} & \textbf{64} & \textbf{64} & \textbf{96}\\
+\bottomrule
+\end{tabular}
+\end{center}
 
-about $20$ particles at $p = 3$ and $150$ at $p = 5$, confirmed over seven values of $p$ as
-$\ln K_{\mathrm{crit}} = 0.86p + 1.45$ with the rate holding to $8$--$10\%$. Below it the parameter
-ensemble collapses exactly as the joint one does.
+Measured on isotropic $\mathcal N(0, I_p)$, Adam at $0.05$, $4000$ iterations, started at exact
+draws. Under the shipped $1/\ln K$ the requirement is $K \gtrsim 4e^{0.86p}$ --- $\ln
+K_{\mathrm{crit}} = 0.862p + 1.449$, with the rate holding to $8$--$10\%$ over seven values of $p$
+--- which is $320$ particles at $p=5$ and $2400$ at $p=7$. Dropping the log leaves the growth
+exponential but slows the rate from $2.68\times$ to $1.33\times$ per dimension
+($K_{\mathrm{crit}} \approx 10\,e^{0.287p}$), giving $48$ at $p=5$ and $64$ at $p=7$: a factor of
+$43$ fewer particles at $p=5$, and the saving grows with $p$. So the $1/\ln K$ of
+Section~\ref{sec:dim} is not merely a constant --- it changes how the cost scales.
+
+\begin{remark}
+The HIV measurements above were taken under the shipped $1/\ln K$, so they understate what
+profiled SVGD can do: at $K = 64$, $p = 5$ the corrected bandwidth should reach about $0.93$ of the
+correct variance rather than the $0.78$ measured. We have not re-run them, because the sd ratio is
+not what decides this --- Section~\ref{sec:theta}'s displacement applies to the profiled marginal
+too, and it is not a dispersion problem. The honest statement is that profiled SVGD's dispersion
+at $p=5$ is better than these numbers show, and its parameter mean is not.
+\end{remark}
 
 Two further costs. HIV at $K = 256$ --- where the rule says it should work --- exhausted a $32$\,GB
 V100 in the reverse pass, needing $256$ particles $\times$ three Cholesky factorisations of a
@@ -442,7 +464,10 @@ Three things are worth keeping, and two of them are not about MAGI:
   smoke test it reads $0.9271$ where the measured ratio is $0.9270$. It is the only cheap
   diagnostic that sees SVGD's characteristic failure, which the optimiser's own convergence test
   cannot: the ensemble converges, to the wrong spread.
-\item \textbf{$K \gtrsim e^{p}$}, for anyone running SVGD on a low-dimensional marginal.
+\item \textbf{A particle-count rule}, for anyone running SVGD on a low-dimensional marginal:
+  $K \approx 10\,e^{0.287p}$ for $90\%$ of the correct variance under the plain median heuristic,
+  or $4e^{0.86p}$ if the $1/\ln K$ is left in --- $48$ against $320$ particles at $p = 5$. Both
+  are measured on isotropic Gaussians and optimistic for anything else.
 \end{enumerate}
 
 \section{What would change the verdict, and what we did not test}
