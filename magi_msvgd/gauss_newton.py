@@ -237,7 +237,7 @@ class GaussNewtonMAP:
         off-diagonal either, since A is positive semidefinite, so leaving it unscaled is safe.
         """
         p, nD, dt = self.p, self.nD, self.dtype
-        eye = jnp.eye(self.dim, dtype=dt)
+        di = jnp.arange(self.dim)                 # damp the diagonal by index, not via an eye
         tiny = jnp.asarray(jnp.finfo(dt).tiny, dt)
         lam_min = jnp.asarray(jnp.finfo(dt).eps, dt)
 
@@ -249,7 +249,7 @@ class GaussNewtonMAP:
             Di = jax.lax.rsqrt(dg)                                       # D = diag(A)^(-1/2)
             As = A * Di[:, None] * Di[None, :]                           # unit diagonal
             du = Di * jax.scipy.linalg.cho_solve(
-                jax.scipy.linalg.cho_factor(As + lam * eye), g * Di)
+                jax.scipy.linalg.cho_factor(As.at[di, di].add(lam)), g * Di)
             # Newton decrement, sqrt(g' A^-1 g), as the convergence measure. It is the same
             # scale-free quantity diagnose() reports: to second order it is the distance from here
             # to the mode in posterior standard deviations, so a tolerance on it means the same
@@ -299,8 +299,9 @@ class GaussNewtonMAP:
         dg = jnp.diag(A)
         dg = jnp.where(dg > tiny, dg, jnp.ones_like(dg))
         Di = jax.lax.rsqrt(dg)
+        As = A * Di[:, None] * Di[None, :]
         du = Di * jax.scipy.linalg.cho_solve(
-            jax.scipy.linalg.cho_factor(A * Di[:, None] * Di[None, :] + lam_min * eye), g * Di)
+            jax.scipy.linalg.cho_factor(As.at[di, di].add(lam_min)), g * Di)
         gd = jnp.dot(g, du)
         dec = jnp.where(jnp.isfinite(gd) & (gd > 0), jnp.sqrt(jnp.abs(gd)), jnp.inf)
         return theta, X, sigmas, it, jnp.linalg.norm(g), dec

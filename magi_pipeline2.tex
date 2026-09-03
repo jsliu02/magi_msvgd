@@ -47,8 +47,8 @@ Gaussian assumption about the parameters whatsoever. On every benchmark in our s
 reference, its largest parameter error is at or below the level at which two independent halves of
 that reference agree with each other: $0.0126$ against a floor of $0.0100$ on FitzHugh--Nagumo,
 $0.0093$ against $0.0081$ on HIV, and $0.0119$ against $0.0405$ on the chaotic Lorenz system, where
-the mode alone is $1.80$ out. It costs between three and twenty-three seconds against roughly two
-hundred and up for a reference chain, and it reports its own reliability without one.
+the mode alone is $1.80$ out. It costs four to six seconds against roughly two hundred and up for
+a reference chain, and it reports its own reliability without one.
 
 Getting there required correcting several things upstream, of which the largest was not in the
 inference at all. MAGI's GP hyperparameters are fitted by an optimiser started at
@@ -93,8 +93,8 @@ minutes and, as we document, can fail silently on exactly the problems where it 
 \begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
 \item A posterior approximation that profiles the states out and integrates the parameters
 directly (Section~\ref{sec:profiled}), reaching the reference chain's own agreement floor on every
-benchmark that has a usable reference, in three to twenty-three seconds, and reporting its
-reliability without a reference.
+benchmark that has a usable reference, in four to six seconds, and reporting its reliability
+without a reference.
 \item A Gaussian-process hyperparameter fit that is scale-free (Section~\ref{sec:gp}). MAGI's
 optimiser starts at $\phi_1=\phi_2=\sigma=1$ whatever the data's units, and on states with
 marginal variance $5.6\times10^4$ it converges to a lengthscale four orders below the grid
@@ -421,10 +421,9 @@ which none of those diagnostics examined.
 \label{sec:diagnosis}
 
 A fast mode makes a set of questions affordable that are usually assumed away. All of the following
-requires no sampler and costs, on these four systems, between ten seconds and a minute and a half
---- most of it in the eight Hessian factorizations of the conditioning check below, which dominates
-on HIV at $d=608$ and can be dropped by setting \texttt{n\_curv=0} when only identifiability is
-wanted.
+requires no sampler and costs four to five seconds per system on a V100, almost all of it XLA
+compilation: a second call on the same model returns in $0.1$ to $0.3$\,s. The persistent
+compilation cache makes that a once-per-machine cost rather than a once-per-process one.
 
 \paragraph{Is it a mode?} The exact Hessian's spectrum, and, if a genuinely negative direction
 exists, a step along it followed by a re-solve. On all four systems there is none. Proximity to the
@@ -596,12 +595,37 @@ $U(\theta, X)$; the profiled mode maximises $U(\theta, X^\star(\theta)) + \tfrac
 H_{XX}(\theta)$, and that determinant---the volume of state space consistent with $\theta$---is
 what the joint mode ignores.
 
-It is \emph{not} worth doing for the curvature, for a structural reason. The second derivative of
-$-U(\theta, X^\star(\theta))$ at the mode is exactly the Schur complement
-$(\Sigma_{\theta\theta})^{-1}$, and the determinant term's curvature is negligible: measured on
-Hes1 at three stencil sizes spanning two orders of magnitude, the profile curvature equals the
-joint Laplace curvature to four decimals. Profiling buys nothing near the mode; everything it gains
-is in the shape away from it.
+The curvature is a subtler matter, and we previously drew the wrong conclusion from the right
+fact. The second derivative of $-U(\theta, X^\star(\theta))$ at the joint mode is exactly the Schur
+complement $(\Sigma_{\theta\theta})^{-1}$, and the determinant term contributes negligibly there:
+measured by finite differences at the joint mode, the profiled curvature matches the Schur
+complement to within $3\%$ on all four systems. We took that to mean the finite-difference Hessian
+was redundant.
+
+It is not, because the profiled posterior is not evaluated at the joint mode. The profile mode sits
+one to one and a half Laplace standard deviations away, and the curvature is not constant over that
+distance:
+
+\begin{center}\small
+\begin{tabular}{lccr}
+\toprule
+& \multicolumn{2}{c}{profiled curvature $/$ Schur complement, per parameter}\\
+system & at the joint mode & at the profile mode & mode shift\\
+\midrule
+hiv    & 1.000 -- 1.000 & 1.000 -- 1.002 & 0.16\,sd\\
+fn     & 0.981 -- 1.019 & 1.039 -- 1.107 & 1.07\,sd\\
+lorenz & 0.979 -- 0.994 & \textbf{0.588 -- 2.088} & 1.42\,sd\\
+hes1   & 0.969 -- 1.023 & \textbf{0.248 -- 4.476} & 1.43\,sd\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+On HIV, whose profile mode barely moves, the joint Laplace curvature would serve. On Lorenz and
+Hes1 it is wrong by factors of two and four, which no $1.3\times$ proposal inflation absorbs. The
+ordering follows $\operatorname{cond}(M)$ from Section~\ref{sec:diagnosis}: the systems whose
+curvature varies over the posterior are the ones where measuring it where it is actually needed
+matters. So the finite-difference Hessian stays, and Section~\ref{sec:stencil}'s care over the step
+is load-bearing rather than defensive.
 
 \subsection{A warm start from the implicit function theorem}
 
@@ -709,14 +733,15 @@ Importance sampling at a few percent effective sample size is not an estimate. W
 $\mathrm{ESS} \ge 10\%$ and $\khat < 0.7$, both computable without a reference, and otherwise
 report the Laplace approximation.
 
-We should be candid that the gate no longer fires on this suite in double precision: after the
-hyperparameter fit all four systems pass it, Hes1 least comfortably at $21\%$. Its one live decline is Hes1 in float32, at
-$\mathrm{ESS} = 2.1\%$. The case that used to justify it---a
-posterior where nothing was identified, the mode already sat at the reference mean, and profiling
-made matters worse---was an artifact of the broken hyperparameters and no longer exists. We keep
-the gate because the failure it guards against is real and cheap to check for, not because we can
-still exhibit it; a reader should weigh it as a safeguard of unproven necessity rather than as a
-demonstrated one.
+The gate fires on exactly one system, Hes1, and it fires there for some Sobol seeds and not
+others---in double precision as well as single, with the effective sample size ranging from
+$2.3\%$ to $21.1\%$ over four seeds (Section~\ref{sec:precision}). That is what a gate is for.
+Hes1 is the system whose geometry Section~\ref{sec:funnel} shows to be a funnel, whose reference
+chain does not converge, and whose profiled fit is not reproducible; the other three pass at
+$62$ -- $77\%$ regardless of seed or precision. The case that used to justify the gate---a
+posterior where nothing was identified and profiling made matters worse---was an artifact of the
+broken hyperparameters and we withdrew it. This is the replacement, and it is a better one,
+because the failure it catches is a failure of the method rather than of the model.
 
 \begin{algorithm}[t]
 \DontPrintSemicolon
@@ -736,7 +761,7 @@ $\theta_i \leftarrow \hat\theta + L z_i$, $z_i$ scrambled Sobol, $LL^\top = H_{\
 }
 $w \propto \exp(\log\hat p_i - \log q_i)$; compute ESS and $\khat$\;
 \Return{mixture if the gate passes, else $\mathcal N(\xmap, \Sigma)$}
-\caption{Profiled MAGI posterior, $\approx 5$\,s at $d=325$}
+\caption{Profiled MAGI posterior, $4$ -- $6$\,s on a V100}
 \label{alg:profiled}
 \end{algorithm}
 
@@ -797,24 +822,25 @@ sets out.
 system & estimate & max $|\theta$ error$|$ & max $|$sd error$|$ & s\\
 \midrule
 fn & mode                    & 1.0286 & 2.18\% & ---\\
-   & \textbf{profiled}       & \textbf{0.0126} & \textbf{0.45\%} & 6.7\\
+   & \textbf{profiled}       & \textbf{0.0126} & \textbf{0.45\%} & 4.6\\
    & reference half-vs-half  & 0.0100 & 0.86\% & \\
 \midrule
 hiv & mode                   & 0.1485 & 0.62\% & ---\\
-   & \textbf{profiled}       & \textbf{0.0093} & \textbf{0.34\%} & 23.2\\
+   & \textbf{profiled}       & \textbf{0.0093} & \textbf{0.34\%} & 5.4\\
    & reference half-vs-half  & 0.0081 & 0.77\% & \\
 \midrule
 lorenz & mode                & 1.8026 & 39.68\% & ---\\
-   & \textbf{profiled}       & \textbf{0.0119} & \textbf{1.27\%} & 5.2\\
+   & \textbf{profiled}       & \textbf{0.0119} & \textbf{1.27\%} & 4.1\\
    & reference half-vs-half  & 0.0405 & 1.19\% & \\
 \midrule
 hes1$^\dagger$ & mode        & 2.8639 & 189.6\% & ---\\
-   & profiled                & 0.2163 & 50.5\% & 3.2\\
+   & profiled                & 0.2163 & 50.5\% & 4.5\\
    & reference half-vs-half  & 0.0841 & 10.9\% & \\
 \bottomrule
 \end{tabular}
 \caption{Parameter errors in reference standard deviations, after the hyperparameter fit of
-Section~\ref{sec:gp}. On FitzHugh--Nagumo, HIV and Lorenz the profiled posterior is at or
+Section~\ref{sec:gp}. Errors are float64; the times in the last column are the recommended
+configuration, float32 on a V100, where the errors agree to a percent (Section~\ref{sec:precision}). On FitzHugh--Nagumo, HIV and Lorenz the profiled posterior is at or
 \emph{below} the level at which two independent halves of the reference agree with each other.
 Lorenz in particular moves from $0.34$ before the fix---which we had attributed to chaotic dynamics
 defeating the inner Laplace approximation---to $0.0119$, so that explanation was wrong.
@@ -829,7 +855,7 @@ agree with each other, which is the most that can be claimed from a finite chain
 a floor of $0.0100$ on FitzHugh--Nagumo, $0.0093$ against $0.0081$ on HIV, and $0.0119$ against
 $0.0405$ on Lorenz, the last comfortably \emph{below} it. Against the mode the improvement is $82$,
 $16$ and $151$ times on location, and the spread errors fall to a fraction of a percent on the
-first two. The costs in the last column---between three and twenty-three seconds---are against
+first two. The costs in the last column---four to six seconds, of which most is compilation---are against
 reference chains of roughly two hundred seconds and up.
 
 Lorenz deserves a note, because we previously drew a conclusion from it that was wrong. Before the
@@ -846,6 +872,7 @@ chain that has not found the posterior rather than a measurement of error. Secti
 takes up why.
 
 \subsection{Precision, and what the stencil was hiding}
+\label{sec:precision}
 
 The profiled estimate appeared at first to require double precision: in single precision its
 effective sample size on FitzHugh--Nagumo fell from $75.7\%$ to $2.4\%$ and the gate replaced it
@@ -868,14 +895,38 @@ precision matches double on FitzHugh--Nagumo and Lorenz and beats it on HIV, in 
 selecting a step an octave or two larger to stay clear of its own round-off floor
 (Table~\ref{tab:chosen}).
 
-The exception is Hes1, and it is a real one: single precision takes its effective sample size from
-$21\%$ to $2.1\%$ and the gate declines. It is not the stencil---both precisions pick a step inside
-the same plateau---and we are not able to attribute it further. Hes1 is the system with the funnel
-(Section~\ref{sec:funnel}), so the curvature the inner solves and the log-determinant see varies by
-six orders of magnitude across the nodes, and float32 has less margin to absorb that; but HIV's
-Hessian is worse conditioned at the mode and single precision helps it, so conditioning alone is
-not the story and we have not isolated what is. The honest summary is narrower than we first wrote
-it: use single precision, and expect the gate to catch the case where it is not enough.
+Hes1 looks like an exception and is really a different problem. We had reported that single
+precision takes its effective sample size from $21\%$ to $2.1\%$; that compared two runs at one
+Sobol seed, and Hes1's effective sample size is not reproducible across seeds in \emph{either}
+precision:
+
+\begin{center}\small
+\begin{tabular}{llrrrrr}
+\toprule
+system & & \multicolumn{4}{c}{ESS by Sobol seed} & spread\\
+\midrule
+fn, hiv, lorenz & f32, f64 & \multicolumn{4}{c}{62 -- 77\% throughout} & $\le 1.1\times$\\
+hes1 & f64 & 21.1\% & 14.0\% & 2.3\% & 18.4\% & $\mathbf{9.1\times}$\\
+hes1 & f32 & 0.6\% & 13.2\% & 8.4\% & 12.2\% & $\mathbf{23\times}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+So the gate fires on Hes1 for some seeds and not others, in double precision as well as single,
+and any single number quoted for it---including the $0.2163$ in Table~\ref{tab:results}---is one
+draw from a wide distribution. That is a better argument for the gate than the one we had: it
+catches a fit that genuinely is not reliable, on the one system whose geometry
+(Section~\ref{sec:funnel}) says it should not be. Everywhere else the two precisions agree to a
+percent and single precision is the better choice.
+
+\paragraph{A guard that did not cover enough.} Setting \texttt{default\_matmul\_precision} to
+\texttt{highest} on the products that form $J^\top J$ is not sufficient on tensor-core hardware.
+The residual and the Jacobian are themselves assembled from einsums against the GP factors, which
+XLA is equally free to run in TF32, and reduced precision there corrupts $J$ before $J^\top J$ is
+ever formed. Unguarded, HIV in float32 on a V100 reports an effective sample size of $35.6\%$
+against $71.2\%$ for the same fit on CPU; guarded, it reports $74.6\%$, and costs no measurable
+time. The failure is silent and shows up only when one configuration is run on two devices, which
+is a reason to do that at least once.
 
 \begin{table}[t]
 \centering\small
@@ -928,8 +979,9 @@ effective sample size stayed at $1.6\%$ and half the inner solves failed. We rec
 construction is sound and may be useful on a genuinely partially identified problem; the target it
 was built for turned out to be an artifact.
 
-\emph{Profiling buys nothing near the mode}, for the structural reason in
-Section~\ref{sec:profiled}.
+\emph{Profiling buys nothing near the joint mode}, for the structural reason in
+Section~\ref{sec:profiled} -- but that is not an argument against computing the profiled curvature,
+as we had read it. It is only a statement about a point the method does not use.
 
 \emph{Two convergence tests that report success on failure.} Clamping the Newton decrement with
 $\max(g^\top\delta, 0)$, to guard against a negative value, converts a round-off failure into a

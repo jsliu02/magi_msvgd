@@ -74,7 +74,10 @@ class ProfiledPosterior:
         gn = m._gn_solver()
         p, n, D, nD = m.p, m.n, m.D, gn.nD
         sig, hess, dt = m.sigmas, m._hessian_fn(), m.mu.dtype
-        eyeX = jnp.eye(nD, dtype=dt)
+        # Ridges go on the diagonal by index rather than through a full nD x nD identity: the
+        # identity is an O(nD^2) add and an O(nD^2) constant in the compiled program, against
+        # nD scalar adds for the same result.
+        di = jnp.arange(nD)
 
         def inner(theta, X0):
             def body(X, _):
@@ -82,7 +85,8 @@ class ProfiledPosterior:
                 # normal-equations Cholesky, so it carries the SQUARE of the Jacobian's condition
                 # number. On HIV that is 4e17 unscaled, and half the inner solves simply fail.
                 A, g, _r, _ = gn._normal_equations_r(theta, X, sig)
-                Axx = A[p:, p:] + self.damp * jnp.trace(A[p:, p:]) / nD * eyeX
+                Axx = A[p:, p:]
+                Axx = Axx.at[di, di].add(self.damp * jnp.trace(Axx) / nD)
                 dg = jnp.diag(Axx)
                 dg = jnp.where(dg > jnp.finfo(dg.dtype).tiny, dg, jnp.ones_like(dg))
                 Di = jax.lax.rsqrt(dg)
@@ -93,7 +97,8 @@ class ProfiledPosterior:
             X, _ = jax.lax.scan(body, X0, None, length=self.inner_iters)
             x = jnp.concatenate([theta, X.ravel()])
             Hxx = hess(x)[p:, p:]
-            Hxx = 0.5 * (Hxx + Hxx.T) + self.jitter * jnp.trace(Hxx) / nD * eyeX
+            Hxx = 0.5 * (Hxx + Hxx.T)
+            Hxx = Hxx.at[di, di].add(self.jitter * jnp.trace(Hxx) / nD)
             c = jax.scipy.linalg.cho_factor(Hxx)
             dd = jnp.diag(c[0])
             ok = jnp.all(jnp.isfinite(X)) & jnp.all(jnp.isfinite(dd)) & (jnp.min(dd) > 0)
@@ -249,18 +254,12 @@ class ProfiledPosterior:
         self.fd_plateau = best is not None
         if best is not None:
             lo, hi = float(lad[best[0]]), float(lad[best[1]])
-            # The MIDDLE of the plateau, not its top. The run's ends are exactly where the estimate
-            # starts to fail -- round-off below, truncation above -- and both bounds are
-            # multiplicative, so the geometric middle is the point of greatest margin on either
-            # side. It also matters that the run is found from DIAGONAL probes while the Newton
-            # needs off-diagonal ones at sqrt(2) times the displacement, so a step that is only
-            # just inside the run for the former can be outside it for the latter.
-            # Caveat on the evidence: the measurement that motivated this was Lorenz before the GP
-            # hyperparameter fit, where the top of the run (3.2) made the off-diagonal probes
-            # non-finite and dropped the effective sample size from 76% to 8%. That no longer
-            # reproduces -- Lorenz's run now ends at 0.8, and taking the top there costs nothing
-            # (67.8% against 67.5% at the middle). The argument is kept because it is cheap and
-            # cannot hurt, not because we can currently exhibit a case where it is needed.
+            # The MIDDLE of the run, not its top: the ends are where the estimate starts to
+            # fail (round-off below, truncation above), both bounds are multiplicative, and the
+            # run is located from DIAGONAL probes while the Newton also needs off-diagonal ones
+            # at sqrt(2) times the displacement. The evidence for it is weaker than it was --
+            # pre-GP-fix Lorenz lost three quarters of its ESS at the top of the run, and that no
+            # longer reproduces (67.8% against 67.5%). Kept as a free precaution.
             pick = float(lad[int(np.argmin(np.abs(np.log(lad) - 0.5 * np.log(lo * hi))))])
             self.fd_run = (lo, hi)
         else:
@@ -380,15 +379,8 @@ class ProfiledPosterior:
         m = self.m
         p = m.p
         t0 = time.time()
-        if getattr(m, "map_particle", None) is None:
-            m.map_solve(verbose=False)
-        x0 = np.asarray(m.map_particle, np.float64)
-        H = np.asarray(m.hessian(x0), np.float64); H = 0.5 * (H + H.T)
-        dsc = np.sqrt(np.maximum(np.abs(np.diag(H)), 1e-300))
-        w_, V_ = np.linalg.eigh(H / np.outer(dsc, dsc))
-        keep = w_ > 1e-10 * max(abs(w_).max(), 1e-300)
-        Sig = ((V_[:, keep] / w_[keep]) @ V_[:, keep].T) / np.outer(dsc, dsc)
-        sd0 = np.sqrt(np.maximum(np.diag(Sig)[:p], 1e-300))
+        lap = m._laplace()                  # shared: one Hessian and one eigendecomposition
+        x0, sd0 = lap.x, np.maximum(lap.sd, 1e-300)
         self.t["setup"] = time.time() - t0
 
         t0 = time.time()

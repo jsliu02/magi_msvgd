@@ -133,9 +133,15 @@ def _solve_upper(U, B):
 
 
 class _Laplace:
-    """Everything derived from the exact Hessian at the MAP, computed once and shared."""
-    __slots__ = ("x", "H", "d", "w", "V", "keep", "Sig", "sd", "whiten",
-                 "n_neg", "n_null", "cond", "S")
+    """
+    Everything read off the exact Hessian at the MAP, computed once and shared.
+
+    x       the mode              Sig     Laplace covariance, pseudo-inverted over the kept span
+    H       the exact Hessian     sd      marginal posterior sd of theta
+    whiten  L with L L^T = Sig    S       dX*/dtheta by the implicit function theorem
+    n_neg, n_null, cond           counts and conditioning of the unit-diagonal scaled Hessian
+    """
+    __slots__ = ("x", "H", "Sig", "sd", "whiten", "n_neg", "n_null", "cond", "S")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -709,7 +715,7 @@ class MAGI:
             wx, Vx = np.linalg.eigh(0.5 * (Hxx + Hxx.T))
             S = -((Vx / np.maximum(wx, 1e-12 * max(wx.max(), 1e-300))) @ (Vx.T @ Hxt))
         self._lap = _Laplace(
-            x=x, H=H, d=d, w=w, V=V, keep=keep, Sig=Sig, S=S,
+            x=x, H=H, Sig=Sig, S=S,
             sd=np.sqrt(np.maximum(np.diag(Sig)[:p], 0)),
             whiten=((V[:, keep] / np.sqrt(w[keep])) @ V[:, keep].T) / d[:, None],
             n_neg=int((w < -1e-10 * sc).sum()), n_null=int((~keep).sum()),
@@ -801,19 +807,11 @@ class MAGI:
         # which looks alarming against any absolute tolerance and corresponds to 6e-3 sd.
         mode_dist = float(np.sqrt(max(g @ Sig @ g, 0.0)))
 
-        # Globality. Two solves have found the same optimum when they land at the same POINT, not
-        # when their log-densities happen to agree to some number of decimals: in single precision
-        # the mode is located to about 5e-3 posterior sd, so log p between two solves of the same
-        # optimum differs by far more than any tight absolute tolerance, and rounding it counted
-        # every restart as a new optimum. Distance is measured in the Hessian metric, per
-        # dimension, so the tolerance means the same thing on every problem.
         # How far the curvature departs from the mode's. The Laplace metric whitens the target
-        # exactly AT the mode, so cond(M) = 1 there by construction; what matters is what happens
-        # a standard deviation away. This predicts how hard the posterior will be to sample before
-        # any chain is run, and it is not visible in the condition number at the mode: on Hes1 the
-        # latter is 1.5e5 while cond(M) reaches 1.8e6 over the posterior, and its reference chain
-        # fails at R-hat 1.76 where every other system converges. Measured on Laplace draws, which
-        # reproduce the ordering obtained from reference draws.
+        # exactly AT the mode, so cond(M) = 1 there by construction and what matters is a standard
+        # deviation away. This predicts how hard the posterior is to sample before any chain runs,
+        # and the condition number at the mode does not: on Hes1 that is 1.5e5 while cond(M)
+        # reaches 1.8e6, and Hes1 is the one system whose reference fails (R-hat 1.76).
         cond_M = np.nan
         if n_curv:
             Lw = lap.whiten
@@ -827,6 +825,10 @@ class MAGI:
                 cs.append(float(np.abs(ei).max() / max(np.abs(ei).min(), 1e-300)))
             cond_M = float(np.median(cs))
 
+        # Globality. Two solves found the same optimum when they land at the same POINT, in the
+        # Hessian metric and per dimension. Comparing log-densities instead fails: in float32 the
+        # mode is located to ~5e-3 posterior sd, so two solves of the same optimum differ by far
+        # more than any tight absolute tolerance, and rounding counted every restart as new.
         best_alt, n_distinct, n_solved = lp0, 1, 1
         if n_starts:
             rng = np.random.default_rng(seed)
@@ -1010,9 +1012,21 @@ class MAGI:
         n_bad = sum(1 for v in o["verdict"] if v == "improper")
         n_rough = int(np.sum(o["ell"] / o["grid_dt"] < 1.0)) if o["grid_dt"] else 0
         hard = np.isfinite(o["cond_M"]) and o["cond_M"] >= 1e5
-        overall = (ok_grad and ok_neg and ok_null and ok_glob and n_bad == 0 and n_rough == 0
-                   and not hard)
-        L.append(f'  STATUS: {"OK" if overall else "FAIL"}')
+        # A mode located to between 1% and 10% of a posterior standard deviation is reported as a
+        # soft failure, matching the row above, and not as a hard one: nothing downstream can tell
+        # the difference, and it is the ordinary float32 floor on the larger systems. HIV in
+        # single precision reads 5.5e-3 on CPU and 1.2e-2 on GPU, where the reduction order in the
+        # linear solve differs -- the same fit, either side of an absolute threshold.
+        soft = (not ok_grad) and o["mode_dist"] < 0.1
+        clean = ok_neg and ok_null and ok_glob and n_bad == 0 and n_rough == 0 and not hard
+        overall = "OK" if (clean and ok_grad) else ("WARN" if (clean and soft) else "FAIL")
+        L.append(f'  STATUS: {overall}')
+        if clean and soft:
+            L.append(f'    Everything passes except the distance to the mode, at '
+                     f'{o["mode_dist"]:.1e} posterior sd against a target of 1e-02. That is the '
+                     f'precision')
+            L.append('    floor rather than a failure to converge; use float64 if an exact '
+                     'stationary point is needed.')
         if hard:
             L.append(f'    The curvature varies by {o["cond_M"]:.0e} over the posterior, so no '
                      f'fixed metric fits it and')
@@ -1033,9 +1047,9 @@ class MAGI:
             L.append('    variance, and in a partially identified model they also bias the '
                      'parameters that ARE')
             L.append('    identified by wherever they come to rest. Set a proper theta_prec.')
-        elif not overall:
+        elif overall == "FAIL":
             L.append('    The mode itself is not trustworthy; anything built on it inherits that.')
-        elif not n_rough:
+        elif overall == "OK" and not n_rough:
             L.append('    The mode is a unique maximum, every parameter is proper, and the GP '
                      'constrains the states.')
         return "\n".join(L)
